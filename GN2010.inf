@@ -1,0 +1,133 @@
+##=====================================================================================================================================================
+##=====================================================================================================================================================
+##                                                      
+## 													  Overland Flow-Urban Flood Model (OFM-Urban)    											 	 	                                                  
+## 																© Vinh Ngoc Tran, 2021                                                      		 
+## 															HYDROLAB, University of Ulsan 
+##                                                     		 
+##
+##														Input File for OFM-Urban simulations
+##
+##=====================================================================================================================================================
+##=====================================================================================================================================================                                                      
+                                                      
+                                                      
+[GENERAL]         =====================================================================================================================================                                             
+## Project Title                                                      
+URBAN FLOOD SIMULATION
+
+## Input Folder
+FOLDER         Examples\input\
+HEAD         Heading.txt                                                      
+SHAPE         mask6.txt                                             
+DEMM         dem6.txt
+INIL         initial6.txt
+IMPE         impervious6.txt
+DEPS         deparea.txt
+CLAI         TestLAI.txt
+VEGH         VegHeight.txt
+TCAN         tcan.txt
+ALBS         albsoil.txt
+ALBV         albveg.txt
+EMIS         emisssoil.txt
+EMIV         emissveg.txt
+ROFF         runoff.txt
+SFLX         SOILFLUX.txt 
+                                                      
+[TIMEOPT]              ================================================================================================================================                                            
+         YYYY         MM         DD         HH         mm         SS
+START_TIME         2010         9         21         13         0         0
+END_TIME         2010         9         21         19         0         0
+NT_REP         600         second
+NT_WAR         60         second 
+DELTA_T         1         second (DELTA_T <= 1 sec is recommended to maintain the model stability if TSP2D = 1)
+DELTA_T1D         60         second (DELTA_T1D >= 60 secs is recommended to avoid model collapse if drainage model is coupled)                                                                        
+
+[MODOPT]               ================================================================================================================================ 
+TSTP2D         2         1:Implicit; 2: Explicit  (Timestepping scheme for OFM stability)                                                                    
+MODCHN         1         1:yes; 0:no	(Channel routing model)                                    
+MODDRA         1         1:yes; 0:no	(Drainage model)
+MODINT         0         1:yes; 0:no	(Conceptual - based Canopy interception, snowmelt, and evapotranspiration model) => faster than Energy based model
+MODETS         0         1:yes; 0:no	(Energy balance-based Evapotranspiration model) 
+MODINF         1         1:yes; 0:no	(Infiltration - runoff model)
+MODSWF         0         1:yes; 0:no	(Soil water fluxes with vegetation, this MODEL requires MODINF and MODINT/MODETS)
+MODRES         0         1:yes; 0:no	(Reservoir operation-coming soon) 
+MODSED         0         1:yes; 0:no	(Sediment transport model-coming soon)
+MODESI         0         1:yes; 0:no	(Soil erosion model-coming soon)                                  
+                                                      
+[OUTLET]               ================================================================================================================================ 
+N_CHOUT         1 
+
+CHN_INF         X-Coord         Y-Coord         SLOPCHN         QMAX_OUT(cms)         W_OUT(m)         D_OUT(m)         MAN_OUT         SLOP_OUT                                                                     
+1         201530.000         444894.659         0.003         1500         20         20         0.0025         0.003                                                                                         
+                                                      
+[INFILTRATION]         ================================================================================================================================                                            
+N_SOIL         1
+SOIL         soil6.txt                                             
+                                    
+PA_INFIL         Ks[cm/h]        Sw[cm]         Wh[cm3/cm3]        Whin[cm3/cm3]        Stm[cm] 
+1         0.044        20         0.49        0.25        0.5                                
+
+[RUNOFF]              =================================================================================================================================
+N_SUBB         1		
+
+PA_ROFF         k0[day]        k1[day]         k2[day]        kp[day]        alpha[-]        um[m] 
+1         75        10         100        10        0.1        0.3 
+ 
+[BOUNDARY]            ==================================================================================================================================
+N_BOUN         0         The number of soft boundary		
+DELTAT_BOUN         60         second
+                                                     
+[CHANNEL]            ==================================================================================================================================                                             
+N_CHN         0                                             
+MAX_CHN         0
+CHNW         chnwidth.txt
+LINK         link.txt                                             
+                                                      
+[RAINFALL]           ==================================================================================================================================                                             
+ID_RAIN         1         1:raingauge; 0:gridded rainfall                                    
+N_GAUGE         1                                             
+DELTAT_RAIN         600         second
+RAIN         RAINFALL2010.DAT                                    
+                                                      
+GAUGE_ID         X-Coord         Y-Coord                                    
+GAU-01         201783.754         443304.08                                    
+
+[WEATHER]           ===================================================================================================================================
+DELTAT_WEA         3600         second
+FORC         weather.mdf
+                                                      
+[ROUGHNESS]         ===================================================================================================================================                                             
+N_MAN         1         0: Gridded ; 1: Lumped
+LANU         landuse6.txt	                                           
+                                                      
+MAN_VAL         0.013         IF N_MAN=1                                                                                          
+                                                      
+[FLOWGAUGE]         ============================================  Not develope yet ====================================================================                                          
+ID_FLOW         0                                             
+N_FLOW         0                                             
+                                                      
+FLOW_ID         X-Coord         Y-Coord                                    
+   
+[DRAINAGE]          ===================================================================================================================================
+N_NODES         1050
+N_LINKS         1325
+N_OUTS         6
+DRAI         makeGN.txt
+NODF         nodegn.txt
+  
+[SOURCES]          ==================================================================================================================================== 
+INFSC         0         1:yes; 2:no	(Inflow to watershed-point source)
+OUTSC         0         1:yes; 2:no	(Controled outflow by pump)
+OUT_FREE         1         1:yes; 2:no	(manhole outlet)
+  
+[RESULTS]        ======================================================================================================================================                                                                                                                                               
+RES_GEN         Gangnam2010_2   
+ 
+ 
+##======================================================================================================================================================
+##
+##																  End of Template.inf
+##                                                                OFM-Urban © HYDROLAB
+##
+##======================================================================================================================================================                                                      
