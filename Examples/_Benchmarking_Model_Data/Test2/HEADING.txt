@@ -1,0 +1,7 @@
+zone         51 S
+ncols         100
+nrows         100
+xllcorner     -200.000
+yllcorner     -198.000
+cellsize      20
+nodata_value  -9999.0

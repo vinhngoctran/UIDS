@@ -1,0 +1,5 @@
+The upstream inflow boundary condition is located along a line extending
+from
+232595 830480
+to
+232785 830290

@@ -1,0 +1,42 @@
+SOIL FLUX INPUTS! EXAMPLE FOR LUMPED AREA
+nlayer	1		%	The	number	of	soil	layers											
+thick	2		%	Thickness	of	each	soil	layers	[mm]										
+stonef	0.5		%	stone	volume	fraction,	unitless												
+psicr	50		%	minimum	plant	leaf	water	potential,	MPa									
+par1	5		%theta	at	saturation,														
+par2	5		%volumetric	water	content	at	field	capacity											
+par3	2		%	hydraulic	conductivity	at	field	capacity,	mm/d										
+par4	0.1		%	matric	potential	at	field	capacity,	kpa										
+par5	0.1		%wetness	at	field	capacity,	dimensionless												
+par6	0.01		%saturated	hydraulic	conductivity														
+par7	0.01		%	clapp	and	hornberger	m,	kpa											
+par8	0.001		%clapp	and	hornberger	m,	kpa												
+par9	0.1		%exponent	for	psi-theta	relation													
+par10	0.3		%wetness	at	dry	end	of	near-saturation	range										
+ilayer	1		%	number	of	layers	over	which	infiltration	is	distributed								
+infexp	0		%	infiltration	exponent,	0	all	to	top,	1	uniform	with	depth,	>1.0=more	at	bottom	than	at	top
+qlayer	0		%	number	of	soil	layers	for	SRFL										
+dispc	1		%	zero-plane	displacement	for	closed	canopy,	m										
+height	2		%	canopy	height,	m,	minimum	of	0.01	m									
+lai	0.2		%	leaf	area	index,	m2/m2,	minimum	of	0.00001									
+sai	0.1		%	stem	area	index,	m2/m2												
+snow	0		%	water	equivalent	of	snow	on	the	ground,	mm								
+snoden	0		%	snow	density,	mm/mm													
+mxrtln	0.1		%	maximum	root	length	per	unit	land	area,	m/m2								
+mxkpl	0.01		%	maximum	plant	conductivity,	(mm/d)/MPa												
+densef	0.01		%	density	factor														
+frelden	1		%	final	relative	values	of	root	length	per	unit	volume							
+tini	0		%	initial	time	for	root	growth	in	layer									
+age	1		%	age	of	vegetation													
+rgroper	1		%	period	of	root	growth	in	layer,	a									
+inirdep	0.5		%	intial	root	depth,	m												
+inirlen	0.3		%	intial	total	root	length,	m	m-2										
+rtrad	10		%	average	root	radius,	mm												
+fxylem	0.1		%	fraction	of	plant	resistance	in	xylem										
+qffc	0.5		%	BYFL	fraction	at	field	capacity											
+qfpar	0.001		%	quick	flow	parameter													
+dslope	2		%	slope	for	soil	water	flow,	radians;	no	DSFLI	if	DSLOPE	=	0				
+length	1		%	slope	length	(for	DSFLI),	m											
+drain	0.01		%gravity	drainage	(should	very	small)												
+gsc	0.2		%	discharge	from	GWAT,	fraction	per	day,	d-1									
+gsp	0.2		%!	fraction	of	discharge	to	seepage											

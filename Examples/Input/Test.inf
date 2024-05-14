@@ -1,0 +1,17 @@
+FOLD	Examples\input\
+GENI	forecastcontrol.RUN
+SHAPE	mask6.txt
+DEMM	dem6.txt
+RAIN	surcharge10.dat
+SOIL	soil6.txt
+CHNW	chnwidth.txt
+LANU	landuse6.txt
+INIL	initial6.txt
+IMPE	impervious6.txt
+LINK	link.txt
+NODE	manholelocation.TXT
+LOGF	forecastout.PRN
+OUTP	DISCHARGE.OUT
+HEAD	Heading.txt
+SURF	surcharge10.dat
+DRAI	Test2.txt
