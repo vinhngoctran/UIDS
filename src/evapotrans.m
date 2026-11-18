@@ -11,19 +11,26 @@
 %   Zipper, S.C. & S.P. Loheide II (2014), DOI: 10.1016/j.agrformet.2014.06.009
 %============================================================================
 
-function [act_evap evap] = evapotrans(Start_Date,deltaT,t, x_cor,y_cor,n_row,x,y,s_grid,areazone,...
+function [act_evap,evap,diagnostics] = evapotrans(Start_Date,deltaT,t, x_cor,y_cor,n_row,x,y,s_grid,areazone,...
                 forcing,lai, vegheight, tcan, albs, albv, emis, emiv,rain_int,oflow,stor,...
                 G_daylightSavings, G_Zair, G_Zu, G_stefBoltz, G_Rv, G_cP, G_mW, G_mA, G_rhow, G_esA, G_esB, G_esC, G_kappa)
+% First output is potential ET, retained in its historical output position.
+% Second output is actual surface evaporation, limited by available water.
+validateattributes(forcing,{'numeric'},{'vector','numel',6,'real','finite'});
+validateattributes(deltaT,{'numeric'},{'scalar','real','finite','positive'});
+validateattributes([lai vegheight rain_int oflow],{'numeric'},{'real','finite','nonnegative'});
+validateattributes([albs albv emis emiv],{'numeric'},{'real','finite','>=',0,'<=',1});
+validateattributes(tcan,{'numeric'},{'scalar','real','finite','>',-273.15});
 
 %% Input variables
 
 % Forcings
 TA = forcing(1);                                            % Air temperature, degrees celsius
-TA_K = TA+273.16;                                           % Air temperature, in Kelvin [degK]
+TA_K = TA+273.15;                                           % Air temperature, in Kelvin [degK]
 SR = forcing(2);                                            % Incoming shortwave radiation, W/m2
 WD = forcing(3);                                            % Wind speed, m/s
 VP = forcing(4);                                            % Air vapor pressure, kPa
-RH = forcing(5);                                            % Relative humidity, kg/kg
+RH = forcing(5);                                            % Specific humidity, kg/kg (legacy column RH)
 PA = forcing(6);                                            % Atmospheric pressure, kPa
 
 % Sites
@@ -38,36 +45,34 @@ PA = forcing(6);                                            % Atmospheric pressu
 % lai = Leaf Area Index, m2/m2
 % vegheight = Canopy height, m
 % Tcan = Canopy surface temperature, degrees celsius
-Tcan_K = tcan+273.16;                                           % Surface temperature [degK]
+Tcan_K = tcan+273.15;                                           % Surface temperature [degK]
 rhoA = (44.6*PA*273.15)/(101.3*TA_K);                           % Molar density of air, C&N eq. 3.3 [mol m-3]
 
 % Constant variables (load common)
 % global G_daylightSavings G_Zair G_Zu G_stefBoltz G_Rv G_cP G_cP G_mW G_mA G_rhow G_esA G_esB G_esC G_kappa
 
 stime = datenum(Start_Date + seconds(deltaT) * t);
-[long lat] = coordinate(x_cor + y * s_grid - s_grid/2,y_cor + n_row * s_grid - x * s_grid + s_grid/2,areazone);
+[lat,long] = coordinate(x_cor + y * s_grid - s_grid/2,y_cor + n_row * s_grid - x * s_grid + s_grid/2,areazone);
 dateVector = datevec(stime);                                    % Vector of datetime
 year = dateVector(1);                                           % Separate out year
 julianDay = floor(stime - datenum(year,01,01))+1;               % Julian day (1 = Jan 1, etc.)
-julianTime = dateVector(4)+(dateVector(5)/60);                  % Julian time, in hours (0-24)
+julianTime = dateVector(4)+dateVector(5)/60+dateVector(6)/3600;  % Julian time, hours (0-24)
 
 %% Data processing, define constants
-% Check if climate variables <= 0
-if WD < 0.1
-    WD = 0.1; 
+if any(~isfinite([forcing(:); lai; vegheight; tcan])) || TA_K <= 0 || Tcan_K <= 0 || PA <= 0
+    error('OFM:ETInput','ET requires finite forcing and positive absolute temperature and pressure.');
 end
-if VP < 0.01
-    VP = 0.01;
-elseif VP == -9999                                                  % calculated from Tair and relative humidity
-    % Hendrik; kPa
-    e_sat = 0.6108 * exp(TA * 17.27 / (237.3 + TA));
-    % kg/kg to kPa; Parish and Putnam 1977)
-    e_abs = RH * rhoA * G_mA * G_Rv * TA / 1000;
-    % Vapour pressure gradient VP, (kPa)
-    VP = e_sat - e_abs;
+WD = max(WD,0.1);
+SR = max(SR,0);
+% The legacy RH column is specific humidity [kg/kg], not relative humidity.
+if VP == -9999
+    if RH < 0 || RH >= 1, error('OFM:Humidity','Specific humidity must lie in [0,1).'); end
+    epsilon = G_mW/G_mA;
+    VP = RH*PA/(epsilon+(1-epsilon)*RH);
 end
+if VP < 0, error('OFM:Humidity','Vapour pressure must be nonnegative or -9999.'); end
+VP = max(VP,0.01);
 
-if lai < 0.01; lai = 0.01; end
 if vegheight < 0.01; vegheight = 0.01; end
 
 %% Calculate Energy Balance
@@ -76,39 +81,40 @@ if vegheight < 0.01; vegheight = 0.01; end
 sp = 279.575+0.9856*julianDay;
 eqTime = (1/3600)*(-104.7*sind(sp)+596.2*sind(2*sp)+4.3*sind(3*sp)-...
     12.7*sind(4*sp)-429.3*cosd(sp)-2*cosd(2*sp)+19.3*cosd(3*sp));   % equation of time (C&N 11.4)
-while long > 7.5;
-    long = long - 15;                                               % figure out # of degrees west of standard meridian (if negative, that means you're east!)
-end
-LC = -long/15;                                                      % calculate longitude correction
-solarNoon = 12 + G_daylightSavings - LC - eqTime;                     % [hrs] - calculate solar noon time
+% coordinate() returns east-positive longitude. Use the nearest standard
+% meridian when no explicit time-zone meridian is supplied by this interface.
+LC = long-15*round(long/15);
+solarNoon = 12+G_daylightSavings-LC/15-eqTime;
 solarDec = asind(0.39785*sind(278.97+0.9856*julianDay+ ...
     1.9165*sind(356.6+0.9856*julianDay)));                          % [deg] - solar declination angle (C&N eq. 11.2)
-zenith = acosd(sind(lat)*sind(solarDec)+ ...
-    cosd(lat)*cosd(solarDec)*cosd(15*(julianTime-solarNoon)));      % [deg] - solar zenith angle (C&N eq. 11.1)
+zenith = acosd(max(-1,min(1,sind(lat)*sind(solarDec)+ ...
+    cosd(lat)*cosd(solarDec)*cosd(15*(julianTime-solarNoon)))));      % [deg] - solar zenith angle (C&N eq. 11.1)
 
 % Calculate downwelling LW radiation, following approach of Crawford &
 % Duchon (1999). Includes cloudiness effects.
 solConst = 1361.5;    % [W m-2] - average annual solar constant. source = wikipedia
-m = 35*cosd(zenith)*(1224*cosd(zenith)*cosd(zenith)+1)^(-0.5);      % calculate airmass number
+cosZenith = max(0,cosd(zenith));
+m = 35*cosZenith/sqrt(1224*cosZenith^2+1);      % calculate airmass number
 
 % look up table for G_Tw (delta) in Tw calculation, from Smith (1966) Table 1
 % Using only summer values here, but table also has spring/winter/fall
 %    (potential future improvement- select values based on julianDay)
-if lat < 10;
+absLatitude=abs(lat);
+if absLatitude < 10;
     G_Tw = 2.80;
-elseif lat <20;
+elseif absLatitude <20;
     G_Tw = 2.70;
-elseif lat <30;
+elseif absLatitude <30;
     G_Tw = 2.98;
-elseif lat <40;
+elseif absLatitude <40;
     G_Tw = 2.92;
-elseif lat <50;
+elseif absLatitude <50;
     G_Tw = 2.77;
-elseif lat <60;
+elseif absLatitude <60;
     G_Tw = 2.67;
-elseif lat <70;
+elseif absLatitude <70;
     G_Tw = 2.61;
-elseif lat <80;
+elseif absLatitude <80;
     G_Tw = 2.24;
 else
     G_Tw = 1.94;
@@ -121,9 +127,15 @@ Tw = 1 - 0.077*(atmWater*m)^0.3;                                    % C&D Eq. 9 
 Ta = 0.935^m;                                                       % C&D Eq. 10 - correction for scattering by aerosols
 
 % Calculate LWin based on cloudiness
-Rso = solConst*cosd(zenith)*TrTpg*Tw*Ta;                            % [W m-2] - clear sky shortwave irradiance
-clf = max([0 min([(1-SR/Rso) 1])]);                                 % [-] - cloudiness fraction, from 0-1. Crawford & Duchon (1999)
-emissSky = (clf + (1-clf)*(1.22+0.06*sin((dateVector(2)+2)*pi/6))*(VP*10/TA_K)^(1/7));    % [-] - emissivity based on cloud fraction, from Crawford & Duchon Eq. 20
+Rso = max(0,solConst*cosZenith*TrTpg*Tw*Ta);                            % [W m-2] - clear sky shortwave irradiance
+if Rso > 1
+    clf = max(0,min(1,1-SR/Rso));
+else
+    % Shortwave observations cannot infer nighttime cloud cover. Use the
+    % clear-sky emissivity term; callers with measured LW use intercsnow.
+    clf = 0;
+end                                 % [-] - cloudiness fraction, from 0-1. Crawford & Duchon (1999)
+emissSky = max(0,min(1,(clf + (1-clf)*(1.22+0.06*sin((dateVector(2)+2)*pi/6))*(VP*10/TA_K)^(1/7))));    % [-] - emissivity based on cloud fraction, from Crawford & Duchon Eq. 20
 LWin = emissSky*G_stefBoltz*(TA_K^4);                                 % [W m-2] - total incoming absorbed longwave radiation from atmosphere
 
 % Calculate LWout based on separate vegetation & soil components
@@ -156,119 +168,20 @@ Cd1 = 7.5;  % empirical coefficient
 uMax = 0.3; % empirical coefficient
 subRough = log(Cw)-1+(1/Cw); % roughness-sublayer influence function
 
-u_uh = min([uMax ((Cs+Cr*(lai/2))^0.5)]);    % ratio of u*/uh
-d = vegheight*(1-(1-exp(-sqrt(Cd1*lai)))/sqrt(Cd1*lai));            % [m] - zero-plane displacement height
+roughnessLAI=max(lai,0.01); % Bare-ground limit for roughness, not radiation cover.
+u_uh = min([uMax ((Cs+Cr*(roughnessLAI/2))^0.5)]);    % ratio of u*/uh
+d = vegheight*(1-(1-exp(-sqrt(Cd1*roughnessLAI)))/sqrt(Cd1*roughnessLAI)); % [m] displacement
 z0m = vegheight*(1-d/vegheight)*exp(-G_kappa*(1/u_uh)-subRough);          % [m] - roughness length for momentum transfer
 kB1 = 2.3;    % kB^-1 factor from Bastiaansen SEBAL paper to convert from z0m to z0h; kB1=2.3 means z0h = 0.1*z0m, which corresponds to C&N empirical equation
 z0h = z0m/exp(kB1); % [m] - roughness length for heat transfer
 
-%%%%%%%%%%%%%% Begin Iteration - positive stability %%%%%%%%%%%%%%%%%%%
-% Iterative solution to H, rH, etc. starting from very low values of H and positive stability
-zeta = 0.5;                                                         % initial stability factor for diabatic correction (zeta from C&N sec 7.5) - >0 when surface cooler than air
-Hiter = 0.5;                                                        % Hiter is placeholder for H during iterative process
-changePerc = 0.5;                                                   % arbitrary starting value;
-i = 0;                                                              % starting i for iterations
-while abs(changePerc)>0.001                                         % set convergence criteria here, in percent
-    i = i+1;                                                        % advance iteration number by one
-    % calculate diabatic correction factors based on zeta. from C&N
-    if zeta > 0                                                     % stable flow
-        %   C&N equation 7.27
-        diabM = 6*log(1+zeta);                                      % diabatic correction for momentum transfer
-        diabH = diabM;                                              % diabatic correction for heat transfer
-    else
-        %    C&N equation 7.26
-        diabH = -2*log((1+(1-16*zeta).^0.5)/2);
-        diabM = 0.6*diabH;
-    end
-    
-    %  calculate u*, gHa based on diabatic correction factors. from C&N
-    uStar = WD*G_kappa/(log((G_Zu-d)/z0m)+diabM); % [m] - friction velocity C&N eq. 7.24
-    rHa = 1/((G_kappa^2)*WD*rhoA/(1.4*((log((G_Zu-d)/z0m)+diabM)*(log((G_Zair-d)/z0h)+diabH)))); % [m2 s mol-1]
-    
-    % by including rExcess, we can ignore the difference between Tsurf and Taero
-    rExcess = G_mA*log(z0m/z0h)/(rhoA*G_kappa*uStar);                       % [m2 s mol-1] - excess resistance, from Norman & Becker (1995)
-    
-    rHtot = rHa+rExcess; % [m2 s mol-1] - total resistance
-    
-    % Calculate H and zeta for next iteration
-    Hiter(i,1) = G_cP*(tcan-TA)/rHtot;                                % sensible heat flux
-    zeta = -G_kappa*9.8*G_Zu*Hiter(i)/(rhoA*G_cP*TA_K*(uStar.^3));            % updated zeta value
-    
-    % calculate the percent change between iterations
-    if i>2
-        changePerc = (Hiter(i)-Hiter(i-1))/Hiter(i-1);
-    else
-        changePerc = 0.5;                                           % Arbitrary initial value for changePerc on first iteration
-    end
-    
-    if i == 10000                                                   % non-convergence scenario. occasionally happens when u is very very very low (or negative).
-%         error('10000 iterations, will not converge');
-    end
+% Solve the original sensible-heat/stability closure with a bounded root
+% search. No unbounded iteration or division by a zero previous heat flux.
+if G_Zu <= d+z0m || G_Zair <= d+z0h
+    error('OFM:ETGeometry','Measurement heights must exceed displacement and roughness heights.');
 end
-
-H_low = Hiter(length(Hiter));                                       % [W m-2] - converged H for low starting values
-
-if H_low == 0;
-    H_low = 0.02;                                                   % set to 0.02 so you don't divide by 0 later on
-end
-
-clear Hiter changePerc zeta
-
-%%%%%%%%%%%%%% Begin Iteration - negative stability %%%%%%%%%%%%%%%%%%%
-% Repeat iterative solution to H & rH, starting from very high values of H and negative stability
-zeta(1) = -0.5;  % initial stability factor for diabatic correction (zeta from C&N sec 7.5) - >0 when surface cooler than air
-Hiter(1) = 500; % Hiter is placeholder for H during iterative process
-changePerc = 0.5; % arbitrary starting value;
-i = 0;  % starting i for iterations
-while abs(changePerc)>0.001                                         % set convergence criteria here, in percent
-    i = i+1;                                                        % advance iteration number by one
-    % calculate diabatic correction factors based on zeta. from C&N
-    if zeta > 0                                                     % stable flow
-        %   C&N equation 7.27
-        diabM = 6*log(1+zeta);                                      % diabatic correction for momentum transfer
-        diabH = diabM;                                              % diabatic correction for heat transfer
-    else
-        %    C&N equation 7.26
-        diabH = -2*log((1+(1-16*zeta).^0.5)/2);
-        diabM = 0.6*diabH;
-    end
-    
-    % calculate u*, gHa based on diabatic correction factors. from C&N
-    uStar = WD*G_kappa/(log((G_Zu-d)/z0m)+diabM);                           % [m] - friction velocity C&N eq. 7.24
-    rHa = 1/((G_kappa^2)*WD*rhoA/(1.4*((log((G_Zu-d)/z0m)+diabM)*(log((G_Zair-d)/z0h)+diabH)))); % [m2 s mol-1]
-    
-    % by including rExcess, we can ignore the difference between Tsurf and Taero
-    rExcess = G_mA*log(z0m/z0h)/(rhoA*G_kappa*uStar);                       % [m2 s mol-1] - excess resistance, from Norman & Becker (1995)
-    
-    rHtot = rHa+rExcess;                                            % [m2 s mol-1] - total resistance
-    
-    % calculate H and zeta for next iteration
-    Hiter(i,1) = G_cP*(tcan-TA)/rHtot;                                % sensible heat flux
-    zeta = -G_kappa*9.8*G_Zu*Hiter(i)/(rhoA*G_cP*TA_K*(uStar.^3));            % updated zeta value
-    if i>2
-        changePerc = (Hiter(i)-Hiter(i-1))/Hiter(i-1);
-    else
-        changePerc = 0.5;
-    end
-    
-    if i == 10000
-%         error('10000 iterations, will not converge');
-    end
-end
-
-H_high = Hiter(length(Hiter));                                      % [W m-2] - converged H for high starting values
-
-if H_high == 0
-    H_high = 0.02;                                                  % set to 0.02 so you don't divide by 0
-end
-
-clear Hiter changePerc zeta
-
-if abs((H_low-H_high))/H_low <= 0.01                                % if H_low and H_high are within 1% of each other, you've converged on a universal solution!
-    H = (H_low+H_high)/2;                                           % [W m-2] - take the mean of your two H calculations for your sensible heat flux
-else                                                                % if both H_low and H_high converge, but the numbers aren't close to each other, something weird happening - probably imaginary numbers in your solution for some reason (negative value somewhere)
-    error('H_low and H_high are too far apart!')
-end
+[H,stability,iterations] = sensible_heat(tcan-TA,WD,rhoA,TA_K,d,z0m,z0h, ...
+    G_Zu,G_Zair,G_kappa,G_cP,G_mA);
 
 %% Calculate ET rate!
 ET = R-G-H;                                                         % [W m-2] - ET rate as residual of energy budget
@@ -276,5 +189,48 @@ lamda = (2.495-(2.36e-3)*tcan)*G_mW*1000000;                        % [J mol-1] 
 act_evap = (G_mW/G_rhow)*(60*60)*1000*ET/lamda;                     % [mm hr-1] - evaporation rate
 act_evap = max(act_evap, 0);                                        % set equal to 0 if it calculates something below 0 (seems to happen occasionally in areas with very low veg cover)
 act_evap = act_evap / 1000/ 3600;                                   % Convert mm hr-1 to m s-1
-evap = min(act_evap,rain_int + (stor/100 + oflow) /deltaT);         % Evapotranspiration [m s-1]
+evap = min(act_evap,max(0,rain_int+max(0,oflow)/deltaT));
+diagnostics = struct('NetRadiation',R,'GroundHeat',G,'SensibleHeat',H, ...
+    'Latitude',lat,'Longitude',long,'VapourPressure',VP,'Stability',stability, ...
+    'Iterations',iterations,'PotentialET',act_evap,'SurfaceET',evap);         % Evapotranspiration [m s-1]
+end
+
+function [H,zeta,iterations] = sensible_heat(dT,wind,rho,T,d,z0m,z0h,Zu,Za,kappa,cP,mA)
+if abs(dT) < 1e-12, H=0; zeta=0; iterations=0; return; end
+% The root has the opposite sign from surface-minus-air temperature.
+lo=0; hi=sign(-dT);
+f0=residual(0); f1=residual(hi);
+for k=1:60
+    if sign(f0) ~= sign(f1), break; end
+    hi=2*hi; f1=residual(hi);
+end
+if sign(f0) == sign(f1)
+    error('OFM:ETConvergence','Could not bracket atmospheric stability. Check forcing and canopy geometry.');
+end
+if hi < lo, temp=lo; lo=hi; hi=temp; end
+flo=residual(lo);
+for iterations=1:100
+    zeta=(lo+hi)/2;
+    f=residual(zeta);
+    if abs(f) <= 1e-10*max(1,abs(zeta)), break; end
+    if sign(f)==sign(flo), lo=zeta; flo=f; else, hi=zeta; end
+end
+[~,H]=residual(zeta);
+if ~isfinite(H) || ~isreal(H)
+    error('OFM:ETConvergence','Invalid sensible heat flux.');
+end
+    function [f,heat] = residual(z)
+        if z > 0
+            dm=6*log1p(z); dh=dm;
+        else
+            dh=-2*log((1+sqrt(1-16*z))/2); dm=0.6*dh;
+        end
+        lm=max(1e-6,log((Zu-d)/z0m)+dm);
+        lh=max(1e-6,log((Za-d)/z0h)+dh);
+        ustar=wind*kappa/lm;
+        rAir=1.4*lm*lh/(kappa^2*wind*rho);
+        rExcess=mA*log(z0m/z0h)/(rho*kappa*ustar);
+        heat=cP*dT/(rAir+rExcess);
+        f=z+kappa*9.8*Zu*heat/(rho*cP*T*ustar^3);
+    end
 end

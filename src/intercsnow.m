@@ -12,9 +12,14 @@
 %   respevtively.
 %============================================================================
 
-function [canopystore, snowpackstore, throughfall, snowmetl,et_soil,et_canopy,act_evap, evap]=intercsnow(deltaT,rain_int,...
+function [canopystore, snowpackstore, throughfall, snowmetl,et_soil,et_canopy,act_evap,evap,potential_surface]=intercsnow(deltaT,rain_int,...
     forcing,albs,lai,vegheight,canopystore,snowpackstore,oflow,stor,...
-    G_stefBoltz, G_kappa, G_lambdalh, G_rhoa, G_Cp, G_Rv, G_pfreez, G_Gam_ma, G_Ds, G_candec, G_F, G_zwd, G_Rc)
+    G_stefBoltz, G_kappa, G_lambdalh, G_rhoa, G_Cp, G_Rv, G_pfreez, G_Gam_ma, G_Ds, G_candec, G_F, G_zwd, G_Rc,varargin)
+validateattributes(deltaT,{'numeric'},{'scalar','real','finite','positive'});
+validateattributes(forcing,{'numeric'},{'vector','numel',5,'real','finite'});
+validateattributes([rain_int lai vegheight canopystore snowpackstore oflow], ...
+    {'numeric'},{'real','finite','nonnegative'});
+validateattributes(albs,{'numeric'},{'scalar','real','finite','>=',0,'<=',1});
 
 % canopystore = canopy;                                         % Canopy store
 % snowpackstore = snowpack;                                     % Snowpack store
@@ -30,6 +35,7 @@ function [canopystore, snowpackstore, throughfall, snowmetl,et_soil,et_canopy,ac
 % rain_int                                                      % Precipitation flux [m/s]
 temperature = forcing(1);                                       % Air temperature [K]    1C = 274.15K
 temperature = temperature + 273.15;
+if temperature<=0, error('OFM:CanopyInput','Air temperature must exceed absolute zero.'); end
 humidity = forcing(2);                                          % Specific humidity [l]
 windspeed = forcing(5);                                         % Wind speed [m s-1]
 sradiation = forcing(3);                                        % Surface downwelling shortwave flux in air ['W m-2]
@@ -45,14 +51,15 @@ lradiation = forcing(4);                                        % Surface downwe
 
 %%
 % Compute derived parameters
-% Vegetation roughness length [m] (3e-4 is for bare soil)
-if vegheight == 0
-    vegheight = 3e-4;
-else
-    vegheight = 0.1 * vegheight;
+if any(~isfinite([forcing(:); rain_int; lai; vegheight; canopystore; snowpackstore])) || ...
+        any([rain_int lai vegheight canopystore snowpackstore oflow] < 0) || humidity < 0 || humidity >= 1
+    error('OFM:CanopyInput','Invalid canopy state, precipitation or specific humidity.');
 end
-% zero-plane displacement [m]
-d = 0.75 * vegheight;
+% Vegetation roughness length [m] (3e-4 is for bare soil)
+canopyHeight=max(0.01,vegheight);
+roughness=max(3e-4,0.1*canopyHeight);
+d=0.75*canopyHeight;
+if G_zwd<=d+roughness, error('OFM:CanopyGeometry','Wind measurement height is below the canopy roughness layer.'); end
 % Temperature for snowfall [K]
 t_snow = G_pfreez;
 % Snowmelt threshold [K]
@@ -66,9 +73,9 @@ else
     phi_t = max(0,min(1,1 - 0.5 * lai));
 end
 %   Compute derived meteorological variables
-T_degC = temperature - 273.;
+T_degC = temperature - 273.15;
 %   Scale to 2m wind speed
-windspeed = windspeed * 4.87 / (log(67.8 * G_zwd - 5.42));
+windspeed = max(0.1,windspeed) * 4.87 / (log(67.8 * G_zwd - 5.42));
 %   Hendrik; kPa
 e_sat = 0.6108 * exp(T_degC * 17.27 / (237.3 + T_degC));
 %   kg/kg to kPa; Parish and Putnam 1977)
@@ -76,7 +83,7 @@ e_abs = humidity * G_rhoa * G_Rv * temperature / 1000;
 %   slope of SVP curve kPa / degC
 Delta_e = 4098. * e_sat / (237.3 + T_degC)^2;
 %  Aerodynamic resistance to evaporation
-r_a = log((G_zwd - d) / vegheight)^2 / (G_kappa^2 * windspeed);
+r_a = log((G_zwd - d) / roughness)^2 / (G_kappa^2 * windspeed);
 %   Prevent negative r_a
 if r_a <= 0
     r_a = 1;
@@ -110,6 +117,10 @@ if VP < 0
 end
 % Penman-Monteith (rc = 0; Rutter/Gash)
 act_e_can = (Delta_e * R_n + (G_rhoa * G_Cp * VP) / r_a) / (Delta_e + G_Gam_ma) / G_lambdalh / 1000;
+if ~isempty(varargin) && ~isempty(varargin{1})
+    validateattributes(varargin{1},{'numeric'},{'scalar','nonnegative','finite'});
+    act_e_can=varargin{1};
+end
 % Scale canopy evaporation by canopy wetted fraction
 e_can = 0;
 if C_t > 0
@@ -118,10 +129,7 @@ end
 % Limit e_can to available canopy water
 e_can = min(canopy / deltaT, e_can);
 canopy = canopy - e_can * deltaT;
-% Avoid small roundoff values
-if canopy < 1.e-11
-    canopy = 0;
-end
+canopy=max(0,canopy);
 % Calculate canopy throughfall, q_t
 if canopy < C_t
     q_t = 0;
@@ -131,10 +139,7 @@ end
 % Limit throughfall if it would deplete more than available
 q_t = min(canopy / deltaT, q_t);
 canopy = canopy - q_t * deltaT;
-% Avoid small roundoff values
-if canopy < 1.e-11
-    canopy = 0;
-end
+canopy=max(0,canopy);
 % Ensure canopy storage doesnt exceed capacity
 if canopy > C_t
     q_t = q_t + (canopy - C_t) / deltaT;
@@ -150,18 +155,17 @@ snowpack = snowpackstore + p_snow * deltaT;
 % Limit snowmelt to available snowpack
 q_m = min(snowpack / deltaT, q_m);
 snowpack = snowpack - q_m * deltaT;
-% avoid small roundoff values
-if snowpack < 1.e-11
-    snowpack = 0;
-end
+snowpack=max(0,snowpack);
 
 %% SURFACE
 % Surface store: add new rain, snowmelt and throughfall
 surface = oflow + (p_soil + q_m + q_t) * deltaT;
 % Surface evaporation: Penman-Monteith
 act_e_surf = ((Delta_e * R_n + (G_rhoa * G_Cp * VP) / r_a)/(Delta_e + G_Gam_ma * (1 + G_Rc / r_a))) / G_lambdalh / 1000;
-% Subtract canopy evaporation if possible, to conserve energy
-e_surf = max(act_e_surf - e_can, 0.);
+if ~isempty(varargin) && ~isempty(varargin{1}), act_e_surf=varargin{1}; end
+% Canopy and ground share one energy demand when MODETS is also enabled.
+potential_surface=max(act_e_surf-e_can,0);
+e_surf=potential_surface;
 % Limit e_surf to available water
 e_surf = min(surface / deltaT, e_surf);
 

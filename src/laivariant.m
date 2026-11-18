@@ -1,5 +1,5 @@
 %============================================================================
-%   cflow.m
+%   laivariant.m
 %
 %   Project:    OFM-Urban
 %   Version:    1.0
@@ -37,8 +37,8 @@ function [LAI_d,LAI_m] = laivariant(LAI_max,LAI_min,time)
 %--------------------------------------------------------------------------
 % 1. Define the different seasons 
 %--------------------------------------------------------------------------
-winter = [12 1 2];      % dormant season (LAI is equal to its maximum value)
-summer = [6 7 8];       % growing season (LAI si equal to its minimum value)
+winter = [12 1 2];      % dormant season (LAI is equal to its minimum value)
+summer = [6 7 8];       % growing season (LAI is equal to its maximum value)
 spring = [3 4 5]; 
 autumn = [9 10 11];
 

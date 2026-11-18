@@ -7,36 +7,79 @@ old = pwd; cleanup = onCleanup(@() cd(old)); cd(root);
 % Closed-domain volume, symmetry, sources, depression storage and no-data.
 shp = zeros(5); z = zeros(5); n = 0.04*ones(5); dep = zeros(5);
 h = zeros(5); h(3,3) = 0.3;
-[r,f] = explicit2(2,shp,5,5,2,dep,2,n,z,h,zeros(5));
+[r,f] = explicit(2,shp,5,5,2,dep,2,n,z,h,zeros(5));
 next = h+2*r;
 assert(all(next(:) >= 0));
 assert(abs(sum(next(:))-sum(h(:))) < 1e-12);
 assert(max(abs(next-flipud(next)),[],'all') < 1e-12);
 assert(max(abs(next-fliplr(next)),[],'all') < 1e-12);
 assert(isequal(size(f),[5 5 2]));
-[r,~] = explicit2(2,shp,5,5,2,dep,2,n,z,zeros(5),ones(5)*1e-4);
+[r,~] = explicit(2,shp,5,5,2,dep,2,n,z,zeros(5),ones(5)*1e-4);
 assert(max(abs(r(:)-1e-4)) < 1e-12);
 dep(:) = 0.05; h(:) = 0; h(3,3) = 0.3;
-[r,~] = explicit2(2,shp,5,5,20,dep,2,n,z,h,zeros(5));
+[r,~] = explicit(2,shp,5,5,20,dep,2,n,z,h,zeros(5));
 next = h+20*r;
 assert(next(3,3) >= 0.05-1e-12);
 assert(abs(sum(next(:))-0.3) < 1e-12);
 z = [0 2]; h = [0.5 0]; dep = [0 0]; n = [0.03 0.03];
-assert(overland2(2,1,dep,1,n,z,h,1,1,1,2) == 0);
+assert(diffusive_face(h(1),h(2),z(1),z(2),n(1),n(2),dep(1),dep(2),1) == 0);
 z = [1200 1200.2]; h = [0.4 0.2];
-assert(abs(overland2(2,1,dep,1,n,z,h,1,1,1,2)) < 1e-10);
+assert(abs(diffusive_face(h(1),h(2),z(1),z(2),n(1),n(2),dep(1),dep(2),1)) < 1e-10);
 h = [0.4 0.1];
-q1 = overland2(2,1,dep,1,n,z,h,1,1,1,2);
-q2 = overland2(2,1,dep,1,n,z,h,1,2,1,1);
+q1 = diffusive_face(h(1),h(2),z(1),z(2),n(1),n(2),dep(1),dep(2),1);
+q2 = diffusive_face(h(2),h(1),z(2),z(1),n(2),n(1),dep(2),dep(1),1);
 assert(abs(q1+q2) < 1e-12 && q1 > 0);
 shp = [0 -9999]; n(2) = -9999;
-[r,~] = explicit2(2,shp,1,2,1,dep,1,n,z,h,[0 0]);
+[r,~] = explicit(2,shp,1,2,1,dep,1,n,z,h,[0 0]);
 assert(all(r == 0));
 
+% Original roof outlet law, conserved transfers and no ground-to-roof flow.
+roofDepth = 0.12; depression = 0.02; dx = 2;
+expectedQ = 0.6*0.5*sqrt(2*9.81)*(roofDepth-depression)^1.5;
+r = diffusive_face(roofDepth,0,999,10,0.03,0.03,depression,0,dx);
+assert(abs(r*dx^2-expectedQ) < 1e-12);
+rReverse = diffusive_face(0,roofDepth,10,999,0.03,0.03,0,depression,dx);
+assert(abs(r+rReverse) < 1e-12);
+assert(diffusive_face(0,5,999,10,0.03,0.03,0,0,dx) == 0);
+assert(diffusive_face(0.1,0.1,999,999,0.03,0.03,0,0,dx) == 0);
+% Explicit masks support real roof elevations and disambiguate 999-m terrain.
+rMarked = diffusive_face(roofDepth,0,15,10,0.03,0.03,depression,0,dx,true,false);
+assert(abs(rMarked-r) < 1e-12);
+rTerrain = diffusive_face(roofDepth,0,999,10,0.03,0.03,depression,0,dx,false,false);
+assert(abs(rTerrain-r) > 1e-6);
+for marked = [false true]
+    shape = zeros(3); bed = zeros(3); depth = zeros(3); storage = zeros(3);
+    if marked, shape(2,2) = 999; bed(2,2) = 15; else, bed(2,2) = 999; end
+    depth(2,2) = 0.12; storage(2,2) = 0.02;
+    [rate,~] = explicit(2,shape,3,3,60,storage,2,0.03*ones(3),bed,depth,zeros(3));
+    next = depth+60*rate;
+    assert(abs(sum(next,'all')-0.12) < 1e-12);
+    assert(next(2,2) >= 0.02-1e-12 && next(2,2) < depth(2,2));
+    assert(all(next(:) >= -1e-12));
+    assert(max(abs(next-flipud(next)),[],'all') < 1e-12);
+    assert(max(abs(next-fliplr(next)),[],'all') < 1e-12);
+end
+% Both sequential and adaptive paths use the roof outlet law.
+rSequential = overland(1,0.1,[0.02 0],2,[0.03 0.03],[999 10],[0.12 0],1,1,1,2,[0 0]);
+assert(abs(rSequential-r) < 1e-12);
+rSteep = overland(1,0.1,[0 0],2,[0.03 0.03],[1 0],[0.1 0],1,1,1,2,[0 0]);
+assert(abs(rSteep-0.6*0.1^1.5/2) < 1e-12);
+
+% Distinct public preprocessing utilities remain available.
+[dayLAI,monthLAI] = laivariant(4,25,datenum(2016,[1 6 12],1));
+assert(isequal(dayLAI,[1;4;1]) && numel(monthLAI) == 12);
+assert(max(abs(processing([6;12;3],4,6,12,1)-[4;6;8])) < 1e-12);
+
+% Optional-model input helpers remain present and callable.
+[latitude,longitude] = coordinate(500000,0,'52 N');
+assert(abs(latitude) < 1e-8 && abs(longitude-129) < 1e-8);
+soilInput = modswfip(fullfile(root,'Examples','Input','SOILFLUX.txt'));
+assert(soilInput.nlayer == 1 && isequal(size(soilInput.par),[10 1]));
+
 % Native forcing preserves cumulative totals with non-integer step ratios.
-x = processing([6;12;3],4,6,12,1);
+x = arrayfun(@(k) sample_forcing([6;12;3],k,4,6,1,false),1:3).';
 assert(max(abs(x-[4;6;8])) < 1e-12);
-x = processing([0;6;12],4,6,12,2);
+x = arrayfun(@(k) sample_forcing([0;6;12],k,4,6,2,false),1:3).';
 assert(max(abs(x-[4;8;12])) < 1e-12);
 grid = ones(2,3)*6;
 assert(isequal(sample_forcing(grid,1,2,6,1,true),ones(2,3)*2));
@@ -114,6 +157,21 @@ for scheme = [1 2]
     assert(max(abs(summary.inun_max(:)-0.003)) < 1e-12);
     clear outputCleanup
 end
+% Rainfall on a marked building reaches the adjacent ground in both schemes.
+roofMask = zeros(3,4); roofMask(2,2) = 999;
+roofBed = zeros(3,4); roofBed(2,2) = 999;
+write_matrix(fullfile(fixture,'MASK.txt'),roofMask);
+write_matrix(fullfile(fixture,'DEM.txt'),roofBed);
+for scheme = [1 2]
+    text = setkey(base,'TSTP2D',num2str(scheme));
+    result = run_case(text,fixture);
+    assert(abs(sum(result.Exp_flo,'all')-12*0.003) < 1e-11);
+    assert(result.Exp_flo(2,2) < 0.003);
+    assert(any(result.Exp_flo(roofMask ~= 999) > 0.003));
+end
+write_matrix(fullfile(fixture,'MASK.txt'),zeros(3,4));
+write_matrix(fullfile(fixture,'DEM.txt'),zeros(3,4));
+
 % Initial conditions and infiltration/runoff coupling retain all water.
 write_matrix(fullfile(fixture,'DEPRESION.txt'),ones(3,4)*0.02);
 text = setkey(base,'TSTP2D','2');
@@ -168,26 +226,15 @@ result = run_case(text,fixture);
 assert(abs(sum(result.ChannelDepth(2,1:3))*2-0.4) < 1e-10);
 assert(all(result.ChannelDepth(2,1:3) >= 0));
 
-% SWMM interval construction uses seconds, constant interval inflows,
-% separate hotstart files, and preserves unrelated sections.
-raw = strings(24,5);
-raw(1,1) = "[OPTIONS]";
-raw(2,1:2) = ["FLOW_UNITS" "CMS"];
-keys = ["START_DATE" "START_TIME" "END_DATE" "END_TIME" ...
-    "REPORT_START_DATE" "REPORT_START_TIME" "REPORT_STEP"];
-raw(3:9,1) = keys.';
-raw(10,1) = "[JUNCTIONS]"; raw(11,1:3) = ["J1" "10" "2"];
-raw(12,1) = "[INFLOWS]"; raw(13,1:3) = ["J1" "FLOW" "OLD"];
-raw(14,1) = "[FILES]"; raw(15,1:3) = ["USE" "HOTSTART" "oldfile"];
-raw(16,1) = "[TIMESERIES]"; raw(17,1:3) = ["OLD" "0:00" "1"];
-swmmFile = fullfile(fixture,'swmm.inp');
-write_swmm_interval(swmmFile,raw,1,0.123,datetime(2016,1,1,0,0,1),2,2);
-written = fileread(swmmFile);
-assert(contains(written,'00:00:03'));
-assert(contains(written,'USE HOTSTART PCUW1D_HS_1'));
-assert(contains(written,'SAVE HOTSTART PCUW1D_HS_0'));
-assert(~contains(written,'oldfile'));
-assert(contains(written,'J1 FLOW OFM_NODE_1 FLOW 1 1 0'));
+% Parse and prepare the supplied SWMM topology once at startup.
+[network,prepared] = prepare_swmm_input(fullfile(root,'Examples', ...
+    '_Benchmarking_Model_Data','Test8B','1D','1D.mdf'), ...
+    datetime(2016,1,1),datetime(2016,1,1,0,0,10),0.1);
+assert(isequal(network.NodeIDs,{'1','2'}));
+assert(isequal(network.LinkIDs,{'1','2'}));
+assert(isequal(network.OutfallIDs,{'3'}));
+assert(~contains(prepared,'HOTSTART'));
+assert(contains(prepared,'ROUTING_STEP 0.1'));
 
 % A short run on the supplied disconnected-water-body benchmark.
 benchmark = fileread(fullfile(root,'Test_01.inf'));

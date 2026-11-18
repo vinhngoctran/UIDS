@@ -1,5 +1,5 @@
 %============================================================================
-%   pcwm.m
+%   ofm_urban.m
 %
 %   Project:    Overland Flow-Urban Flood Model (OFM-Urban)
 %   Version:    1.0
@@ -13,7 +13,6 @@ function Results = ofm_urban(Filename, options)
 % Results contains the final snapshot. Each step is saved independently.
 if nargin < 2, options = struct(); end
 if ~isfield(options,'Plot'), options.Plot = false; end
-% clear all; 
 clc
 display(['================== Overland Flow-Urban Flood Model (OFM-Urban) ====================']);
 display(' ');
@@ -22,9 +21,6 @@ display(['                       HYDROLAB, University of Ulsan ']);
 display(' ');
 display(['===================================================================================']);
 display(' ');
-
-
-
 
 
 %% #################################################################################################################################################
@@ -55,7 +51,6 @@ InP_FILE = fillmissing(InP_FILE,'constant',"");
 % Configuration files may use Windows separators on any platform.
 folderRow = find(InP_FILE(:,1) == "FOLDER");
 InP_FILE(folderRow,2) = string(strrep(char(InP_FILE(folderRow,2)),char(92),filesep));
-source_folder = fileparts(mfilename('fullpath'));
 restore_folder = onCleanup(@() cd(current_folder));
 clear opts Example_file
 
@@ -335,6 +330,7 @@ s_dep = s_dep/100;                                                              
 clearvars DEPS_DAT;
 
 active = shp ~= -9999;
+roof_cells = active & (shp == 999 | dem == 999);
 if any(~isfinite(dem(active))) || any(~isfinite(man_area(active)) | man_area(active) <= 0) || ...
         any(~isfinite(s_dep(active)) | s_dep(active) < 0)
     error('OFM:GridInput','Active cells need finite elevations, positive roughness and nonnegative depression storage.');
@@ -431,94 +427,38 @@ if modets == 1
     clearvars i FORC_DAT forcingsraw;
 end
               
-% Read manholes (nodes) from sewer system
+% Parse sewer identifiers once, independent of section order and comments.
+node_ad = -9999*ones(n_row,n_col);
+node_invert = -9999*ones(n_row,n_col);
 if moddrain == 1
-    if exist('read1D','file') ~= 3 && exist('read1D','file') ~= 2
-        error('OFM:SWMMDependency','A read1D binary for this MATLAB platform is required. The repository supplies Windows binaries.');
+    if exist('swmm_live','file') ~= 3
+        error('OFM:SWMMBuild','Run build_swmm once before using MODDRA=1.');
     end
-    if DELTA_T1D < 1 || abs(DELTA_T1D-round(DELTA_T1D)) > 1e-9 || abs(t_dur-round(t_dur)) > 1e-9
-        error('OFM:CouplingStep','DELTA_T1D must be a positive whole number of seconds.');
+    validateattributes(DELTA_T1D,{'numeric'},{'scalar','positive','finite'});
+    if deltaT < 0.001 || abs(t_dur-round(t_dur)) > 1e-8
+        error('OFM:CouplingStep','SWMM requires DELTA_T >= 0.001 seconds and a whole-second run duration.');
     end
-    % Read input for Drainage model
-    idx = find(InP_FILE(:,1)=='DRAI');
-    opts = delimitedTextImportOptions("NumVariables", 11);
-    opts.DataLines = [1, Inf];
-    opts.Delimiter = " ";
-    opts.VariableNames = ["Project", "TitleNotes", "VarName3", "VarName4", "VarName5", "VarName6", "VarName7", "VarName8", "VarName9", "VarName10", "VarName11"];
-    opts.VariableTypes = ["string", "string", "string", "string", "string", "string", "string", "string", "string", "string", "string"];
-    opts.ExtraColumnsRule = "ignore";
-    opts.EmptyLineRule = "read";
-    opts.ConsecutiveDelimitersRule = "join";
-    opts.LeadingDelimitersRule = "ignore";
-    opts = setvaropts(opts, ["Project", "TitleNotes", "VarName3", "VarName4", "VarName5", "VarName6", "VarName7", "VarName8", "VarName9", "VarName10", "VarName11"], "WhitespaceRule", "preserve");
-    opts = setvaropts(opts, ["Project", "TitleNotes", "VarName3", "VarName4", "VarName5", "VarName6", "VarName7", "VarName8", "VarName9", "VarName10", "VarName11"], "EmptyFieldRule", "auto");
-    DRAI_DAT = readmatrix([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(InP_FILE(:,1)==["DRAI"]),2}], opts);
-    clear opts idx
-    DRAI_DAT = fillmissing(DRAI_DAT,'constant',"");
-    
-    % Update model runtime
-    idx = find(DRAI_DAT(:,1) == ["START_DATE"]);
-    DRAI_DAT{idx,2} =   datestr(Start_Date,'mm/dd/yyyy');                                       % Start Date
-    idx = find(DRAI_DAT(:,1) == ["START_TIME"]);
-    DRAI_DAT{idx,2} =   datestr(Start_Date,'HH:MM:SS');                                         % Start Time
-    
-    idx = find(DRAI_DAT(:,1) == ["REPORT_START_DATE"]);
-    DRAI_DAT{idx,2} =   datestr(Start_Date,'mm/dd/yyyy');                                       % Report Start Date
-    
-    idx = find(DRAI_DAT(:,1) == ["REPORT_START_TIME"]);
-    DRAI_DAT{idx,2} =   datestr(Start_Date,'HH:MM:SS');                                         % Report Start Time
-    
-    idx = find(DRAI_DAT(:,1) == ["REPORT_STEP"]);
-    DRAI_DAT{idx,2} =   char(duration(0,0,max(1,deltaT),'Format','hh:mm:ss'));             % Report step
-    
-    idx = find(DRAI_DAT(:,1) == ["WET_STEP"]);
-    DRAI_DAT{idx,2} =   char(duration(0,0,max(1,deltaT),'Format','hh:mm:ss'));             % Report step
-    
-    idx = find(DRAI_DAT(:,1) == ["DRY_STEP"]);
-    DRAI_DAT{idx,2} =   char(duration(0,0,max(1,deltaT),'Format','hh:mm:ss'));             % Report step
-    
-    idx = find(DRAI_DAT(:,1) == ["ROUTING_STEP"]);
-    DRAI_DAT{idx,2} =   char(duration(0,0,max(1,deltaT),'Format','hh:mm:ss'));             % Report step
-    
-    for nn = 1:n_node
-        ID_nodes{nn} = DRAI_DAT{find(DRAI_DAT(:,1)==["[COORDINATES]"])+nn+2,1};                 % Node name
-        x_node(nn,1) = str2num(DRAI_DAT{find(DRAI_DAT(:,1)==["[COORDINATES]"])+nn+2,2});        % Location X of manholes (nodes)
-        y_node(nn,1) = str2num(DRAI_DAT{find(DRAI_DAT(:,1)==["[COORDINATES]"])+nn+2,3});        % Location Y of manholes (nodes)
-        z_node(nn,1) = str2num(DRAI_DAT{find(DRAI_DAT(:,1)==["[JUNCTIONS]"])+nn+2,3});          % Invert depth of manholes (nodes)
-        h_node(nn,1) = str2num(DRAI_DAT{find(DRAI_DAT(:,1)==["[JUNCTIONS]"])+nn+2,2});          % Invert elevation of manholes (nodes)
+    sewerInput = [InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2}, ...
+        InP_FILE{find(InP_FILE(:,1)==["DRAI"]),2}];
+    [network,sewerInputText] = prepare_swmm_input(sewerInput,Start_Date,End_Date,DELTA_T1D);
+    if numel(network.NodeIDs) ~= n_node || numel(network.LinkIDs) ~= n_link || ...
+            numel(network.OutfallIDs) ~= n_out
+        error('OFM:SWMMCount','N_NODES, N_LINKS and N_OUTS must match the SWMM network.');
     end
-    
-    x_node_c = x_cor;
-    y_node_c = y_cor + n_row * s_grid;
-    for i=1:n_row
-        for j=1:n_col
-            node_ad(i,j) = -9999;
-            node_invert(i,j) = -9999;
-            x = x_node_c + j * s_grid - s_grid/2;
-            y = y_node_c - i * s_grid + s_grid/2;
-            for k=1:n_node
-                if j == floor((x_node(k,1)-x_cor)/s_grid)+1 && i == floor((y_cor+n_row*s_grid-y_node(k,1))/s_grid)+1
-                    node_ad(i,j) = k;
-                    node_invert(i,j) = dem(i,j)-h_node(k,1); % rim-to-invert depth
-                end
-            end
-        end
+    nodeRows = floor((y_cor+n_row*s_grid-network.XY(:,2))/s_grid)+1;
+    nodeCols = floor((network.XY(:,1)-x_cor)/s_grid)+1;
+    if any(nodeRows < 1 | nodeRows > n_row | nodeCols < 1 | nodeCols > n_col)
+        error('OFM:SWMMCoordinates','A coupled junction lies outside the OFM grid.');
     end
-    
-    for nl = 1:n_link
-        ID_links{nl} = DRAI_DAT{find(DRAI_DAT(:,1)==["[CONDUITS]"])+nl+2,1};                    % Link name
+    nodeCells = sub2ind([n_row n_col],nodeRows,nodeCols);
+    if numel(unique(nodeCells)) ~= n_node || any(~active(nodeCells)) || ...
+            any(ismember(shp(nodeCells),[4 5 6]))
+        error('OFM:SWMMCoordinates','Each junction needs its own active cell without a prescribed boundary.');
     end
-    
-    for no = 1:n_out
-        ID_out{no} = DRAI_DAT{find(DRAI_DAT(:,1)==["[OUTFALLS]"])+no+2,1};                      % Out name
-    end
-    clearvars nn nl no i j k x y x_node_c y_node_c y_node x_node NODE_DAT;
+    node_ad(nodeCells) = 1:n_node;
+    node_invert(nodeCells) = dem(nodeCells)-network.Invert;
 else
-    n_node = 0;
-    node_ad(1:n_row,1:n_col) = -9999;
-    n_link = 0;
-    n_out = 0;
-    node_invert(1:n_row,1:n_col) = -9999;
+    n_node = 0; n_link = 0; n_out = 0;
 end
 
 % Read free outlet
@@ -615,45 +555,61 @@ evap(1:n_row,1:n_col) = 0;                              % Evapotranspiration [m/
 tot_act_evap(1:n_row,1:n_col) = 0;                      % Total evapotranspiration [m]
 
 % For Soil water fluxes model
-psim(1:n_row,1:n_col) = 500;                            % matric soil water potential, kPa  
+psim(1:n_row,1:n_col) = -500;                            % matric soil water potential, kPa
 gwat(1:n_row,1:n_col) = 0;                              % groundwater storage below soil layers, mm
-vrfli(1:n_row,1:n_col) = 0;                             % vertical drainage rate from layer i, m/d
-infli(1:n_row,1:n_col) = 0;                             % infiltration rate into layer, m/d
-byfli(1:n_row,1:n_col) = 0;                             % bypass flow rate from layer, m/d
-dsfli(1:n_row,1:n_col) = 0;                             % downslope flow rate from layer, m/d
-ntfli(1:n_row,1:n_col) = 0;                             % net flow rate into layer, m/d
-trani(1:n_row,1:n_col) = 0;                             % transpiration rate from layer, m/d
+vrfli(1:n_row,1:n_col) = 0;                             % vertical drainage rate from layer i, mm/day
+infli(1:n_row,1:n_col) = 0;                             % infiltration rate into layer, mm/day
+byfli(1:n_row,1:n_col) = 0;                             % bypass flow rate from layer, mm/day
+dsfli(1:n_row,1:n_col) = 0;                             % downslope flow rate from layer, mm/day
+ntfli(1:n_row,1:n_col) = 0;                             % net flow rate into layer, mm/day
+trani(1:n_row,1:n_col) = 0;                             % transpiration rate from layer, mm/day
 swat(1:n_row,1:n_col) = 0;                              % total soil water in all layers, mm
 gwfl(1:n_row,1:n_col) = 0;                              % streamflow from groundwater discharge, mm/d
 seep(1:n_row,1:n_col) = 0;                              % deep seepage loss from groundwater, mm/d
 
+% Optional soil states use a layer dimension, never a time dimension.
+soil_evap=zeros(n_row,n_col); transpiration=soil_evap; potential_et=soil_evap;
+soil_balance=soil_evap; seep_total=soil_evap; soil_et_total=soil_evap;
+if modswf==1
+    layers=modsfl_inf.nlayer;
+    psim=repmat(reshape(modsfl_inf.psim_init,1,1,layers),n_row,n_col,1);
+    gwat(:)=modsfl_inf.gwat_init;
+    vrfli=zeros(n_row,n_col,layers); infli=vrfli; byfli=vrfli; dsfli=vrfli; ntfli=vrfli; trani=vrfli;
+end
+
 % For Drainage
-surcharge_at_t = zeros(1,n_node);                           % Initial surcharge flow
 node_depth_at_t = zeros(1,n_node);                          % Initial water depth of manhole
 q_to_freeoutlet = [];
 node_surch = []; node_depth = []; link_flow = []; out_flow = []; out_depth = [];
 q_to_manhole = zeros(1,n_node);
-q_to_manhole_sum = zeros(1,n_node);
-if moddrain == 1
-    couplingSteps = round(DELTA_T1D/deltaT);
-    if couplingSteps < 1 || abs(couplingSteps*deltaT-DELTA_T1D) > 1e-8*DELTA_T1D
-        error('OFM:CouplingStep','DELTA_T1D must be a positive whole multiple of DELTA_T.');
-    end
-end
+node_flood_volume = zeros(1,n_node);
+sewer_in_volume = zeros(1,n_node);
+sewer_return_volume = zeros(1,n_node);
+sewer_out_volume = zeros(1,n_out);
 
-Temp_folder = ['Results/',InP_FILE{find(InP_FILE(:,1)==["RES_GEN"]),2}];
+Temp_folder = fullfile(current_folder,'Results',InP_FILE{find(InP_FILE(:,1)==["RES_GEN"]),2});
 % Give every run a separate directory so incomplete or older runs cannot mix.
 if ~exist(Temp_folder,'dir'), mkdir(Temp_folder); end
 [~,run_id] = fileparts(tempname);
 Temp_folder = fullfile(Temp_folder,['run_',run_id]);
 mkdir(Temp_folder);
+if moddrain == 1
+    drainage_folder = fullfile(Temp_folder,'drainage');
+    mkdir(drainage_folder);
+    preparedFile = fullfile(drainage_folder,'model.inp');
+    fid = fopen(preparedFile,'wt');
+    if fid < 0, error('OFM:SWMMInput','Cannot write the startup SWMM input.'); end
+    fprintf(fid,'%s',sewerInputText);
+    fclose(fid);
+    clear sewerInputText
+    sewer = drainage(preparedFile,fullfile(drainage_folder,'model.rpt'), ...
+        network.NodeIDs,network.LinkIDs,network.OutfallIDs);
+    sewerCleanup = onCleanup(@() sewer.close());
+    node_depth_at_t = sewer.State.NodeDepth;
+end
 save(fullfile(Temp_folder,'metadata.mat'),'dem','shp','head_plot','deltaT', ...
     'Start_Date','End_Date','n_row','n_col','NT_RunOF','-v7.3');
 display(' ');
-
-
-
-
 
 
 %% #################################################################################################################################################
@@ -666,7 +622,6 @@ display(' ');
 % Snapshots are written after every computational step.
 t_save = 0;
 T_warning = NT_WAR;
-t1D = 1;
 tic;
 
 for t = 1:NT_RunOF
@@ -733,11 +688,10 @@ for t = 1:NT_RunOF
                 % =========================================================
                 if modets == 1
                     % Use Energy balance model
-                    [act_evap(x,y) evap_EB] = evapotrans(Start_Date,deltaT,t, x_cor,y_cor,n_row,x,y,s_grid,areazone,...
+                    [potential_et(x,y),evap_EB] = evapotrans(Start_Date,deltaT,t, x_cor,y_cor,n_row,x,y,s_grid,areazone,...
                                                 forcingets_at_t,lai(x,y), vegheight(x,y), tcan(x,y),...
                                                 albs(x,y), albv(x,y), emis(x,y), emiv(x,y),rain_int(x,y),oflow(x,y),stor(x,y),...
                                                 G_daylightSavings, G_Zair, G_Zu, G_stefBoltz, G_Rv, G_cP, G_mW, G_mA, G_rhow, G_esA, G_esB, G_esC, G_kappa);
-                    % display('EVAPOTRANSPIRATION MODEL OK');
                     if modint == 0
                         evap(x,y) = evap_EB;
                     end
@@ -746,18 +700,23 @@ for t = 1:NT_RunOF
                 % =========================================================
                 % CANOPY INTERCEPTION, SNOWMETL MODEL, and EVAPOTRANSPIRATION
                 % =========================================================
+                canopyPotential=[];
+                if modets==1, canopyPotential=potential_et(x,y); end
                 if modint == 1
                      % Use Rutter–Gash canopy formulation
-                     [canopystore(x,y), snowpackstore(x,y), throughfall(x,y), snowmetl(x,y),et_soil(x,y),et_canopy(x,y),act_lum,evap(x,y)]=intercsnow(deltaT,rain_int(x,y),...
+                     [canopystore(x,y), snowpackstore(x,y), throughfall(x,y), snowmetl(x,y),et_soil(x,y),et_canopy(x,y),act_lum,evap(x,y),groundPotential]=intercsnow(deltaT,rain_int(x,y),...
                                                 forcingint_at_t,albs(x,y),lai(x,y),vegheight(x,y),canopystore(x,y),snowpackstore(x,y),oflow(x,y),stor(x,y),...
-                                                G_stefBoltz, G_kappa, G_lambdalh, G_rhoa, G_Cp, G_Rv, G_pfreez, G_Gam_ma, G_Ds, G_candec, G_F, G_zwd, G_Rc); 
-%                   display('CANOPY OK');
+                                                G_stefBoltz, G_kappa, G_lambdalh, G_rhoa, G_Cp, G_Rv, G_pfreez, G_Gam_ma, G_Ds, G_candec, G_F, G_zwd, G_Rc,canopyPotential);
                     % 
-                    if modets == 0
-                        act_evap(x,y) = act_lum;
-                    end
+                    act_evap(x,y)=act_lum;
+                    potential_et(x,y)=groundPotential+et_canopy(x,y);
+                else
+                    groundPotential=potential_et(x,y);
+                    act_evap(x,y)=evap(x,y);
                 end
-                tot_act_evap(x,y) = tot_act_evap(x,y) + act_evap(x,y)*deltaT;
+                % Unmet ground demand can withdraw soil water only via SVAT.
+                if modint==1, surfaceEvap=et_soil(x,y); else, surfaceEvap=evap(x,y); end
+                unmetET=max(0,groundPotential-surfaceEvap)*(1-imp(x,y));
                 
                 % Compute temporary water depth from the effective rainfall and evapotranspiration
                 if modint == 1
@@ -770,14 +729,6 @@ for t = 1:NT_RunOF
                 % COMPUTE INFLOW - OUTFLOW FROM POINT SOURCES -------------
                 if shp(x,y) == 6                                                                % Soft boundary with water inflow [m3/s]
                     of_rate(x,y) = of_rate(x,y) + boundary_at_t(bshape(x,y)) / s_grid^2;
-                end
-                if outsc == 1
-                    %                     of_rate(x,y) = 0;
-                end
-                
-                % Compute temporary water depth from surcharge flow if 1D sewer model is used
-                if moddrain == 1 && node_ad(x,y) ~= -9999
-                    of_rate(x,y) = of_rate(x,y) + surcharge_at_t(node_ad(x,y)) / s_grid^2;
                 end
                 
                 % =========================================================
@@ -803,18 +754,25 @@ for t = 1:NT_RunOF
                 % SOIL WATER FLUXES MODEL
                 % =========================================================
                 if modswf == 1
-                    if modets == 1 && modint == 0
-                        [psim(x,y),gwat(x,y),vrfli(x,y),infli(x,y),byfli(x,y),dsfli(x,y),ntfli(x,y),trani(x,y),swat(x,y),gwfl(x,y),seep(x,y)] = soilground...
-                                            (modsfl_inf,psim(x,y),tot_act_evap(x,y)/(t*deltaT),gwat(x,y),act_evap(x,y),inf_rate(x,y),deltaT);
-                    elseif modint == 1
-                        [psim(x,y),gwat(x,y),vrfli(x,y),infli(x,y),byfli(x,y),dsfli(x,y),ntfli(x,y),trani(x,y),swat(x,y),gwfl(x,y),seep(x,y)] = soilground...
-                                            (modsfl_inf,psim(x,y),tot_act_evap(x,y)/(t*deltaT),gwat(x,y),et_soil(x,y),inf_rate(x,y),deltaT);                        
-                    elseif modets == 0 && modint == 0
-                       	[psim(x,y),gwat(x,y),vrfli(x,y),infli(x,y),byfli(x,y),dsfli(x,y),ntfli(x,y),trani(x,y),swat(x,y),gwfl(x,y),seep(x,y)] = soilground...
-                                            (modsfl_inf,psim(x,y),tot_act_evap(x,y)/(t*deltaT),gwat(x,y),0,inf_rate(x,y),deltaT);
-                    end
+                    profile=reshape(psim(x,y,:),1,[]);
+                    cover=1-exp(-0.5*max(0,lai(x,y)));
+                    [profile,gwat(x,y),vFlux,iFlux,bFlux,dFlux,nFlux,tFlux,swat(x,y), ...
+                        gwfl(x,y),seep(x,y),soilDiag]=soilground(modsfl_inf,profile, ...
+                        cover*unmetET,gwat(x,y),(1-cover)*unmetET,inf_rate(x,y),deltaT);
+                    psim(x,y,:)=reshape(profile,1,1,[]);
+                    vrfli(x,y,:)=reshape(vFlux,1,1,[]); infli(x,y,:)=reshape(iFlux,1,1,[]);
+                    byfli(x,y,:)=reshape(bFlux,1,1,[]); dsfli(x,y,:)=reshape(dFlux,1,1,[]);
+                    ntfli(x,y,:)=reshape(nFlux,1,1,[]); trani(x,y,:)=reshape(tFlux,1,1,[]);
+                    soil_evap(x,y)=soilDiag.SoilEvaporation/1000/86400;
+                    transpiration(x,y)=soilDiag.Transpiration/1000/86400;
+                    soil_balance(x,y)=soilDiag.BalanceResidual;
+                    act_evap(x,y)=act_evap(x,y)+soil_evap(x,y)+transpiration(x,y);
+                    of_rate(x,y)=of_rate(x,y)+(gwfl(x,y)+sum(bFlux+dFlux))/1000/86400;
+                    seep_total(x,y)=seep_total(x,y)+seep(x,y)/1000/86400*deltaT;
+                    soil_et_total(x,y)=soil_et_total(x,y)+(soil_evap(x,y)+transpiration(x,y))*deltaT;
                 end
-                
+                tot_act_evap(x,y)=tot_act_evap(x,y)+act_evap(x,y)*deltaT;
+
                 % Keeping track of the Total Volume of rainfall and total volume of infitration
                 if t == NT_RunOF
                     vin = vin + tot_rain_depth(x,y)*s_grid^2;
@@ -855,10 +813,7 @@ for t = 1:NT_RunOF
                         xx = x + z + 1;
                         yy = y - z;
                         if xx <= n_row && yy <= n_col && shp(xx,yy) ~= -9999
-                            %                             Res_flowvec(x,y,z+2,t) = overland(TSP2D,deltaT,s_dep,s_grid,man_area,dem,oflow,x,y,xx,yy,of_rate);
-                            %                             of_rate(x,y) = of_rate(x,y) - Res_flowvec(x,y,z+2,t);
-                            %                             of_rate(xx,yy) = of_rate(xx,yy) + Res_flowvec(x,y,z+2,t);
-                            Res_flowvec = overland(TSP2D,deltaT,s_dep,s_grid,man_area,dem,oflow,x,y,xx,yy,of_rate);
+                            Res_flowvec = overland(TSP2D,deltaT,s_dep,s_grid,man_area,dem,oflow,x,y,xx,yy,of_rate,roof_cells);
                             of_rate(x,y) = of_rate(x,y) - Res_flowvec;
                             of_rate(xx,yy) = of_rate(xx,yy) + Res_flowvec;
                         end
@@ -875,8 +830,7 @@ for t = 1:NT_RunOF
             display(['             Overland Flow Model is running with Explicit scheme. . .']);
         end
         
-        [of_rate,uvfluxs] = explicit2(TSP2D,shp,n_row,n_col,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,fixedDepth);
-        %         Res_flowvec(:,:,:,t) = uvfluxs;
+        [of_rate,uvfluxs] = explicit(TSP2D,shp,n_row,n_col,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,fixedDepth);
         
     end
     
@@ -886,22 +840,23 @@ for t = 1:NT_RunOF
     % ===========================================================================================================================================
     drainage_updated = false;
     if moddrain == 1
-        q_to_manhole_sum = q_to_manhole_sum + q_to_manhole;
-        intervalSteps = mod(t-1,couplingSteps)+1;
-        if intervalSteps == couplingSteps || t == NT_RunOF
-            cd(source_folder);
-            intervalDt = intervalSteps*deltaT;
-            intervalStart = Start_Date + seconds((t-intervalSteps)*deltaT);
-            [node_surch,node_depth,link_flow,out_flow,out_depth] = drainage( ...
-                n_node,n_out,DRAI_DAT,intervalStart,intervalDt,intervalDt,1,t1D, ...
-                q_to_manhole_sum/intervalSteps);
-            surcharge_at_t = node_surch;
-            node_depth_at_t = node_depth;
-            q_to_manhole_sum(:) = 0;
-            drainage_updated = true;
-            t1D = t1D+1;
-            cd(current_folder);
-        end
+        % Exchange every surface step. SWMM keeps its state and may use
+        % smaller hydraulic steps; all clocks end at the same instant.
+        sewerState = sewer.advanceTo(t*deltaT,q_to_manhole);
+        node_flood_volume = sewerState.NodeFloodVolume;
+        node_surch = node_flood_volume/deltaT;
+        node_depth = sewerState.NodeDepth;
+        node_depth_at_t = node_depth;
+        link_flow = sewerState.LinkFlow;
+        out_flow = sewerState.OutFlow;
+        out_depth = sewerState.OutDepth;
+        sewer_in_volume = sewer_in_volume+q_to_manhole*deltaT;
+        sewer_return_volume = sewer_return_volume+node_flood_volume;
+        sewer_out_volume = sewer_out_volume+sewerState.OutVolume;
+        % Return this interval's actual flooded volume once, in this step.
+        % Do not repeat a stale surcharge rate in the following interval.
+        of_rate(nodeCells) = of_rate(nodeCells) + node_flood_volume(:)/(s_grid^2*deltaT);
+        drainage_updated = true;
     end
 
     % ===========================================================================================================================================
@@ -975,19 +930,11 @@ for t = 1:NT_RunOF
     end
     
     
-    % Discharge from overland flow. NOTE: because the water from this
-    % part of the cell already "poured" into the channel when updating
-    % the channel depth, q_out = 0 when the channel routing is selected
+    % Compute discharges from the surface and channel outlet storage.
     for iout = 1:n_chout
         % Calculate the flow going out from the overland portion
         pflow = sqrt(slop_out(iout)) / Man_out(iout);
         q_out(iout) = qoutlet(s_grid,deltaT,oflow,x_out,y_out,iout,of_rate,D_out,W_out,pflow);
-%         if oflow(x_out(iout),y_out(iout)) + of_rate(x_out(iout),y_out(iout)) * deltaT > D_out(iout)
-%             q_out(iout) = W_out(iout) * pflow * ((oflow(x_out(iout),y_out(iout)) + of_rate(x_out(iout),y_out(iout)) * deltaT - D_out(iout))^(5/3));
-%         else
-%             q_out(iout) = 0;
-%         end
-        
         % Overland water depth at outlet cell is reduced after taking the outflow out of the cell
         of_rate(x_out(iout),y_out(iout)) = of_rate(x_out(iout),y_out(iout)) - q_out(iout) / s_grid^2;
         
@@ -1044,26 +991,9 @@ for t = 1:NT_RunOF
     % ===========================================================================================================================================
     % Compute the portion of the overland depth due to: RAINFALL, INFLOW
     % AND OUTFLOW SOURCES, INFILTRATION, OVERLAND
-    for x = 1:n_row
-        for y = 1:n_col
-            if shp(x,y) ~= -9999
-                oflow(x,y) = oflow(x,y) + of_rate(x,y) * deltaT;        % Water depth
-                %                 if oflow(x,y) < 0
-                %                     oflow(x,y) = 0;
-                %                 elseif oflow(x,y) <= s_dep(x,y) && of_rate(x,y) < 0
-                %                     oflow(x,y) = s_dep(x,y);
-                %                 end
-                
-%                 if isnan(oflow(x,y)) || isinf(oflow(x,y)) || isinf(of_rate(x,y))
-%                     oflow(x,y)
-%                     of_rate(x,y)
-%                     pause
-%                 end
-            end
-        end
-    end
+    oflow(active) = oflow(active) + of_rate(active)*deltaT;
     oflow(shp == 4 | shp == 5) = fixedDepth(shp == 4 | shp == 5);
-    if any(~isfinite(oflow(active))) || any(oflow(active) < -1e-10)
+    if ~isreal(oflow) || any(~isfinite(oflow(active))) || any(oflow(active) < -1e-10)
         error('OFM:InvalidDepth','Invalid surface depth at step %d.',t);
     end
     oflow(active) = max(oflow(active),0);
@@ -1127,6 +1057,8 @@ for t = 1:NT_RunOF
     end
     Results.Step = t;
     Results.TimeSeconds = t*deltaT;
+    Results.total_evap=tot_act_evap;
+    Results.potential_et=potential_et;
     Results.DateTime = Start_Date+seconds(t*deltaT);
     Results.OutputDirectory = Temp_folder;
     Results.StepsWritten = t_save;
@@ -1163,16 +1095,27 @@ for t = 1:NT_RunOF
         Results.out_flow = out_flow;
         Results.out_depth = out_depth;
         Results.drainage_updated = drainage_updated;
+        Results.SewerTimeSeconds = sewerState.TimeSeconds;
+        Results.NodeFloodVolume = node_flood_volume;
+        Results.SewerInVolume = sewer_in_volume;
+        Results.SewerReturnVolume = sewer_return_volume;
+        Results.SewerOutVolume = sewer_out_volume;
+        Results.SewerVolume = sewerState.SewerVolume;
     end
     if modswf == 1
+        Results.soil_evap=soil_evap;
+        Results.transpiration=transpiration;
+        Results.soil_balance=soil_balance;
+        Results.seep_total=seep_total;
+        Results.soil_et_total=soil_et_total;
         Results.psim = psim;                                            % matric soil water potential, kPa
         Results.gwat = gwat;                                            % groundwater storage below soil layers, mm
-        Results.vrfli = vrfli;                                          % vertical drainage rate from layer i, m/d
-        Results.infli = infli;                                          % infiltration rate into layer, m/d
-        Results.byfli = byfli;                                          % bypass flow rate from layer, m/d
-        Results.dsfli = dsfli;                                          % downslope flow rate from layer, m/d
-        Results.ntfli = ntfli;                                          % net flow rate into layer, m/d
-        Results.trani = trani;                                          % transpiration rate from layer, m/d
+        Results.vrfli = vrfli;                                          % vertical drainage rate from layer i, mm/day
+        Results.infli = infli;                                          % infiltration rate into layer, mm/day
+        Results.byfli = byfli;                                          % bypass flow rate from layer, mm/day
+        Results.dsfli = dsfli;                                          % downslope flow rate from layer, mm/day
+        Results.ntfli = ntfli;                                          % net flow rate into layer, mm/day
+        Results.trani = trani;                                          % transpiration rate from layer, mm/day
         Results.swat = swat;                                            % total soil water in all layers, mm
         Results.gwfl = gwfl;                                            % streamflow from groundwater discharge, mm/d
         Results.seep = seep;                                            % deep seepage loss from groundwater, mm/d
@@ -1184,6 +1127,7 @@ for t = 1:NT_RunOF
     save(Res_name,'Results','Waterdepth','WaterVec','-v7.3');
 end
 
+if moddrain == 1, sewer.close(); end
 FinalTime = toc;
 Res_name = fullfile(Temp_folder,'summary.mat');
 save(Res_name,'Results','inun_max','dem','oflow','head_plot','deltaT', ...

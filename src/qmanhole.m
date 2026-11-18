@@ -8,6 +8,7 @@ elseif sewerHead < dem
     q = 1.5*sqrt(2*9.81)*h^1.5;
 else
     q = 1.5^2*sqrt(2*9.81)*sqrt(max(0,dem+h-sewerHead));
-endq = min(q,h*s_grid^2/deltaT);
+end
+q = min(q,h*s_grid^2/deltaT);
 of_rate = of_rate-q/s_grid^2;
 end
