@@ -371,4 +371,4 @@ storage bounds, and complete-driver water balances for each supported
 ET/canopy/soil combination.
 
 ## Acknowledgments
-Vinh Ngoc Tran, vinhtn@umich.edu
+Vinh Ngoc Tran, vinhtn@ornl.gov
