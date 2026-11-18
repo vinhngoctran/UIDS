@@ -11,6 +11,13 @@
 
 function dq = cflow(deltaT,s_grid,hchan,hh,w_chn,d_chn,stordep,rmanch,sf,varargin)
 
+% Dry channels have no conveyance, including reverse-flow donors.
+if hh <= 0 || sf == 0
+    dq = 0;
+    return
+end
+s_fact = 1;
+if ~isempty(varargin), s_fact = varargin{1}; end
 %Calculate flow area and wetted perimeter
 if hchan <= d_chn
     wp = w_chn + 2 * hh;
@@ -27,10 +34,8 @@ else
 end
 
 %Limit the outflow by availability
-vol_ch_avail = area * s_grid;
-if dq * deltaT > vol_ch_avail
-    dq = vol_ch_avail / deltaT;
-end
+vol_ch_avail = max(0,area) * s_grid * s_fact;
+dq = sign(dq)*min(abs(dq),vol_ch_avail/deltaT);
 
 end
 

@@ -23,13 +23,13 @@ end
 vol_init = area_init * s_grid * s_fact;
 
 %After adding new volume calculates volume
-vol_final = vol_init + tot_vol_chn;
+vol_final = max(0,vol_init + tot_vol_chn);
 
 %...and depth corresponding to the final volume
 if vol_final > vol_ch
-    n_cdepth = d_chn + (vol_final - vol_ch) / (s_grid * s_grid * sfactor);
+    n_cdepth = d_chn + (vol_final - vol_ch) / (s_grid * s_grid * s_fact);
 else
-    n_cdepth = vol_final / (w_chn * s_grid * sfactor);
+    n_cdepth = vol_final / (w_chn * s_grid * s_fact);
 end
 
 end 

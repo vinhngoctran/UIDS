@@ -11,6 +11,8 @@
 
 function [q_chn chn_rate] = chnroutin(deltaT,n_chn,s_grid,j,i,dem,s_dep,inil,ad_chn,pa_chn,chn_rate,n_flow,locat_flow,varargin)
 
+q_chn = zeros(1,n_flow);
+idx = i;
 x = ad_chn(i,j,1);
 y = ad_chn(i,j,2);
 
@@ -40,9 +42,7 @@ end
 %Channel slope
 s0=(dem(x,y) - dem(xx,yy)) / (s_grid * s_fact);
 
-if s0 < 0.003
-    s0 = 0.003;
-end
+% Preserve the signed bed slope for diffusive routing.
 
 %If xxx less than zero, end of the channel link has been reached
 %Slope is compted with the last node of current link and first node
@@ -61,9 +61,7 @@ end
 dhdx = (inil(xx,yy) - inil(x,y)) / (s_grid.*s_fact);
 sf = s0 - dhdx;
 
-if abs(sf) < 1e-20
-    sf = 1e-20;
-end
+
 
 if sf < 0
     if xxx < 0
@@ -89,6 +87,21 @@ end
 
 %Determine discharge
 dq = cflow(deltaT,s_grid,hchan,hh,w_chn,d_chn,stordep,rmanch,sf,s_fact);
+
+% Cap total donor withdrawals, including transfers already scheduled this step.
+if dq >= 0
+    donorx = x; donory = y;
+else
+    donorx = xx; donory = yy;
+end
+hd = max(0,inil(donorx,donory));
+if hd <= d_chn
+    volume = w_chn*hd*s_grid*s_fact;
+else
+    volume = (w_chn*d_chn+(hd-d_chn)*s_grid)*s_grid*s_fact;
+end
+available = max(0,volume+chn_rate(donorx,donory)*deltaT);
+dq = sign(dq)*min(abs(dq),available/deltaT);
 
 %Determining discharge
 chn_rate(x,y) = chn_rate(x,y) - dq;

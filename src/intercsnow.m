@@ -63,7 +63,7 @@ C_t = 0.002 * lai;
 if lai == 0
     phi_t = 1;
 else
-    phi_t = 1 - 0.5 * lai;
+    phi_t = max(0,min(1,1 - 0.5 * lai));
 end
 %   Compute derived meteorological variables
 T_degC = temperature - 273.;
@@ -111,7 +111,10 @@ end
 % Penman-Monteith (rc = 0; Rutter/Gash)
 act_e_can = (Delta_e * R_n + (G_rhoa * G_Cp * VP) / r_a) / (Delta_e + G_Gam_ma) / G_lambdalh / 1000;
 % Scale canopy evaporation by canopy wetted fraction
-e_can = act_e_can * (canopy / C_t);
+e_can = 0;
+if C_t > 0
+    e_can = max(0,act_e_can)*min(1,canopy/C_t);
+end
 % Limit e_can to available canopy water
 e_can = min(canopy / deltaT, e_can);
 canopy = canopy - e_can * deltaT;
@@ -154,7 +157,7 @@ end
 
 %% SURFACE
 % Surface store: add new rain, snowmelt and throughfall
-surface = oflow + stor/100 + (p_soil + q_m + q_t) * deltaT;
+surface = oflow + (p_soil + q_m + q_t) * deltaT;
 % Surface evaporation: Penman-Monteith
 act_e_surf = ((Delta_e * R_n + (G_rhoa * G_Cp * VP) / r_a)/(Delta_e + G_Gam_ma * (1 + G_Rc / r_a))) / G_lambdalh / 1000;
 % Subtract canopy evaporation if possible, to conserve energy
@@ -169,6 +172,6 @@ throughfall = (q_t + p_soil);                               % Throughfall
 snowmetl = q_m;                                             % Snowmetl
 et_soil = e_surf;                                           % Evaporation soil surface
 et_canopy = e_can;                                          % Evaporation canopy
-act_evap = act_e_can + act_e_surf;                          % Actual evapotranspiration
+act_evap = e_can + e_surf;                          % Actual evapotranspiration
 evap = e_surf + e_can;                                      % Evapotranspiration
 end

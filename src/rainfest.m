@@ -36,7 +36,7 @@ else                        % For local rainfall from gauge
         dist_gau = sqrt((xc - x_rain).^2 + (yc-y_rain).^2);
         
         % Find gage closet to the cell (Thiessen polygon)
-        idx = find(dist_gau == min(dist_gau));
+        [~,idx] = min(dist_gau(:));
         
         rain_int = RAIN_at_t(idx);
     end

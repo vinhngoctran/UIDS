@@ -9,7 +9,10 @@
 %   Main program of OFM-Urban.
 %============================================================================
 
-function Results = ofm_urban(Filename)
+function Results = ofm_urban(Filename, options)
+% Results contains the final snapshot. Each step is saved independently.
+if nargin < 2, options = struct(); end
+if ~isfield(options,'Plot'), options.Plot = false; end
 % clear all; 
 clc
 display(['================== Overland Flow-Urban Flood Model (OFM-Urban) ====================']);
@@ -49,6 +52,11 @@ opts = setvaropts(opts, ["Project", "TitleNotes", "VarName3", "VarName4", "VarNa
 InP_FILE = readmatrix(Example_file, opts);
 clear opts
 InP_FILE = fillmissing(InP_FILE,'constant',"");
+% Configuration files may use Windows separators on any platform.
+folderRow = find(InP_FILE(:,1) == "FOLDER");
+InP_FILE(folderRow,2) = string(strrep(char(InP_FILE(folderRow,2)),char(92),filesep));
+source_folder = fileparts(mfilename('fullpath'));
+restore_folder = onCleanup(@() cd(current_folder));
 clear opts Example_file
 
 
@@ -71,13 +79,19 @@ End_Date = datetime(str2num(InP_FILE(find(InP_FILE(:,1) == ["END_TIME"]),2)),...
 deltaT = str2num(InP_FILE(find(InP_FILE(:,1) == ["DELTA_T"]),2));                        % The computational time step (in second)
 DELTA_T1D = str2num(InP_FILE(find(InP_FILE(:,1) == ["DELTA_T1D"]),2));                   % The computational time step for 1D sewer model (in second)
 DeltaT_Time = string(duration(0,0,deltaT),'hh:mm:ss');
-t_dur = seconds(time(caldiff([Start_Date,End_Date],'Time')));                            % Duration of event (in hour)
-NT_RunOF = t_dur/deltaT;                                                                 % The number of time intervals for overland flow simulations
-dt_REP = str2num(InP_FILE(find(InP_FILE(:,1) == ["NT_REP"]),2));                         % The time interval to export the flood results (in minute)
-NT_REP = dt_REP / deltaT;
-NT_WAR = str2num(InP_FILE(find(InP_FILE(:,1) == ["NT_WAR"]),2));                         % The time interval to export the flood results (in minute)
-NT_WAR = NT_WAR / deltaT;
-TSP2D = str2num(InP_FILE(find(InP_FILE(:,1) == ["TSTP2D"]),2));                           % The scheme for Timestepping: 1: Implicit, 2: Explicit
+t_dur = seconds(End_Date-Start_Date); % Duration [seconds]
+validateattributes(deltaT,{'numeric'},{'scalar','positive','finite'});
+validateattributes(t_dur,{'numeric'},{'scalar','positive','finite'});
+NT_RunOF = round(t_dur/deltaT);
+if abs(NT_RunOF*deltaT-t_dur) > 1e-8*max(1,t_dur)
+    error('OFM:TimeStep','Simulation duration must be a whole number of DELTA_T steps.');
+end
+NT_WAR = str2num(InP_FILE(find(InP_FILE(:,1) == ["NT_WAR"]),2));                         % Reporting interval in seconds (step snapshots are always written).
+validateattributes(NT_WAR,{'numeric'},{'scalar','positive','finite'});
+NT_WAR = max(1,round(NT_WAR/deltaT));
+TSP2D = str2num(InP_FILE(find(InP_FILE(:,1) == ["TSTP2D"]),2));
+if ~ismember(TSP2D,[1 2]), error('OFM:Scheme','TSTP2D must be 1 or 2.'); end
+% TSTP2D: 1 legacy sequential update, 2 adaptive explicit routing.
 
 % Read model option -------------------------------------------------------
 modchn = str2num(InP_FILE(find(InP_FILE(:,1) == ["MODCHN"]),2));                         % Checking for channel
@@ -86,10 +100,11 @@ infsc = str2num(InP_FILE(find(InP_FILE(:,1) == ["INFSC"]),2));                  
 outsc = str2num(InP_FILE(find(InP_FILE(:,1) == ["OUTSC"]),2));                           % Checking for free outlet (sewer system or pump)
 out_free = str2num(InP_FILE(find(InP_FILE(:,1) == ["OUT_FREE"]),2));                     % Checking for free outlet (sewer system)
 
+x_coord = zeros(0,1); y_coord = zeros(0,1);
 n_chout = str2num(InP_FILE(find(InP_FILE(:,1) == ["N_CHOUT"]),2));                       % Cell number in row for outlet
 for i=1:n_chout
-    x_coord(i) = str2num(InP_FILE(find(InP_FILE(:,1) == ["CHN_INF"])+i,2));              % Cell number in row for outlet
-    y_coord(i) = str2num(InP_FILE(find(InP_FILE(:,1) == ["CHN_INF"])+i,3));              % Cell number in colum for outlet
+    x_coord(i,1) = str2num(InP_FILE(find(InP_FILE(:,1) == ["CHN_INF"])+i,2));              % Cell number in row for outlet
+    y_coord(i,1) = str2num(InP_FILE(find(InP_FILE(:,1) == ["CHN_INF"])+i,3));              % Cell number in colum for outlet
     slopchn(i) = str2num(InP_FILE(find(InP_FILE(:,1) == ["CHN_INF"])+i,4));              % Bed slope of channel at outlet
     Qmax_out(i) = str2num(InP_FILE(find(InP_FILE(:,1) == ["CHN_INF"])+i,5));             % Maximum flow at outlet (optional or 0)
     W_out(i) = str2num(InP_FILE(find(InP_FILE(:,1) == ["CHN_INF"])+i,6));                % Width of channel at outlet
@@ -131,9 +146,12 @@ if n_boun ~= 0
     deltaT_bound = str2num(InP_FILE(find(InP_FILE(:,1) == ["DELTAT_BOUN"]),2));          % Time interval for boundary condition (in second)
     boundary_dat = textread([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},...             % Read boundary data
                                 InP_FILE{find(InP_FILE(:,1)==["BOUN"]),2}]);
-    boundary_dat = processing(boundary_dat,deltaT,deltaT_bound,t_dur,2);                 % Processing data: 0: for cummulative rainfall, 1: constant, 2: linear interpolation                       
+    % Boundary data stay at their native interval; sampled during the run.
 end
 
+if modswf == 1 && (modinf ~= 1 || (modint ~= 1 && modets ~= 1))
+    error('OFM:SoilWaterOptions','MODSWF requires MODINF and either MODINT or MODETS.');
+end
 if modswf ==1                                                                            % Load inputs for Soil water fluxes model
     modsfl_inf = modswfip([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(InP_FILE(:,1)==["SFLX"]),2}]);
 end
@@ -182,8 +200,8 @@ if modchn == 1
     LINK_DAT = textread([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(InP_FILE(:,1)==["LINK"]),2}]);
     for i=1:n_chn
         for j=1:2
-            ad_chn(i,1:max_chn,j) = ...
-                LINK_DAT(2+(i-1)*2+j,1:max_chn);                                         % Channel element addreses
+            ad_chn(i,1:max_chn+2,j) = ...
+                [LINK_DAT(2+(i-1)*2+j,1:max_chn), -1, -1];                                         % Channel element addreses
         end
     end
     clearvars CHN_DAT LINK_DAT i j;
@@ -227,12 +245,12 @@ SHAPE_DAT = textread([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(
 shp = SHAPE_DAT(1:n_row,1:n_col);
 clearvars SHAPE_DAT;
 
-if n_chn > 0        % Define channel
+if modchn == 1 && n_chn > 0        % Define channel
     for i = 1:n_chn
         for j =1:max_chn
             x = ad_chn(i,j,1);
             y = ad_chn(i,j,2);
-            if modchn == 1
+            if x > 0 && y > 0
                 shp(x,y) = 1;
             end
         end
@@ -255,6 +273,17 @@ if n_boun ~= 0
     bshape = BOUND_DAT(1:n_row,1:n_col); 
     clearvars BOUND_DAT;
 end
+prescribed = shp == 4 | shp == 6;
+if any(prescribed(:))
+    if n_boun == 0
+        error('OFM:BoundaryInput','Stage and flow boundary cells require N_BOUN > 0.');
+    end
+    ids = bshape(prescribed);
+    if any(ids < 1 | ids ~= round(ids) | ids > size(boundary_dat,2))
+        error('OFM:BoundaryInput','Boundary cell identifiers must reference boundary data columns.');
+    end
+end
+
 % Read soil type
 if n_soil > 0
     if n_soil == 1
@@ -275,22 +304,12 @@ elseif modinf == 1 && n_runoff > 1
         clearvars RUNOFF_DAT;
 end
 
-% Compute location of outlet
-x_node_c = x_cor;
-y_node_c = y_cor + n_row * s_grid;
-for i=1:n_row
-    for j=1:n_col
-        x = x_node_c + j * s_grid - s_grid/2;
-        y = y_node_c - i * s_grid + s_grid/2;
-        for k=1:n_chout
-            if  abs(x-x_coord(k,1)) <= s_grid/2 && abs(y-y_coord(k,1)) <= s_grid/2
-                x_out(k) = i;
-                y_out(k) = j;
-            end
-        end
-    end
+% Map coordinates to one cell using the raster's north-to-south row order.
+x_out = floor((y_cor+n_row*s_grid-y_coord)/s_grid)+1;
+y_out = floor((x_coord-x_cor)/s_grid)+1;
+if n_chout > 0 && any(x_out < 1 | x_out > n_row | y_out < 1 | y_out > n_col)
+    error('OFM:OutletLocation','An outlet lies outside the model grid.');
 end
-clearvars i j k x_node_c y_node_c x y;
 
 % Read Manning's coefficients based on Land use
 n_man = str2num(InP_FILE(find(InP_FILE(:,1) == ["N_MAN"]),2));                            % The number of Manning's coefficients for roughness
@@ -314,6 +333,12 @@ DEPS_DAT = textread([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(I
 s_dep = DEPS_DAT(1:n_row,1:n_col);                                                         % Depression storage (using lumped approach, distributed approach can be developed soon)
 s_dep = s_dep/100;                                                                         % Convert centimeter to meter unit.
 clearvars DEPS_DAT;
+
+active = shp ~= -9999;
+if any(~isfinite(dem(active))) || any(~isfinite(man_area(active)) | man_area(active) <= 0) || ...
+        any(~isfinite(s_dep(active)) | s_dep(active) < 0)
+    error('OFM:GridInput','Active cells need finite elevations, positive roughness and nonnegative depression storage.');
+end
 
 if modint == 1 
     % Read LAI
@@ -361,27 +386,25 @@ clearvars INIL_DAT;
 % Read rainfall (in mm)
 if id_rain == 0                                                                           % Rainfall at grids
     RAIN_DAT = textread([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(InP_FILE(:,1)==["RAIN"]),2}]);
-    for i = 1:t_dur/deltaT_rain
-        rainfallraw(1:n_row,1:n_col,i) = RAIN_DAT(1+(i-1)*n_row:n_row+(i-1)*n_row,1:...
-            n_col)
+    nRain = ceil(t_dur/deltaT_rain);
+    rainfall = zeros(n_row,n_col,nRain);
+    for i = 1:nRain
+        rainfall(:,:,i) = RAIN_DAT(1+(i-1)*n_row:i*n_row,1:n_col);
     end
-else                                                                                       % Rainfall at gauges
+else
     RAIN_DAT = textread([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(InP_FILE(:,1)==["RAIN"]),2}]);
-    for i = 1:t_dur/deltaT_rain
-        rainfallraw(i,1:n_gauge) = RAIN_DAT(i,1:n_gauge);
-    end
+    rainfall = RAIN_DAT(:,1:n_gauge);
 end
-rainfall = processing(rainfallraw,deltaT,deltaT_rain,t_dur,1);                              % Processing data: 0: for cummulative rainfall, 1: constant, 2: linear interpolation 
-clearvars RAIN_DAT i rainfallraw;
+clearvars RAIN_DAT i;
 
 % Read weather data(forcings) for intercept model: TA (air temperature), ET (potential evaporation)
 if modint == 1
     deltaT_wea = str2num(InP_FILE(find(InP_FILE(:,1) == ["DELTAT_WEA"]),2));               % Time interval for forcings (in second)
     FORC_DAT = readtable([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(InP_FILE(:,1)==["FORC"]),2}],'FileType','text');
-    for i=1:t_dur/deltaT_wea
+    for i=1:ceil(t_dur/deltaT_wea)
         forcingsraw(i,:) = [FORC_DAT.TA(i),FORC_DAT.RH(i), FORC_DAT.SR(i),FORC_DAT.LR(i), FORC_DAT.WD(i)];
     end  
-    forcingint = processing(forcingsraw,deltaT,deltaT_wea,t_dur,0);                         % Processing data: 0: for cummulative rainfall, 1: constant, 2: linear interpolation 
+    forcingint = forcingsraw;                         % Processing data: 0: for cummulative rainfall, 1: constant, 2: linear interpolation
     % Read Albedo of soil
     ALBS_DAT = textread([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(InP_FILE(:,1)==["ALBS"]),2}]);
     albs = ALBS_DAT(1:n_row,1:n_col);
@@ -395,21 +418,27 @@ end
 if modets == 1
     deltaT_wea = str2num(InP_FILE(find(InP_FILE(:,1) == ["DELTAT_WEA"]),2));                % Time interval for forcings (in second)
     FORC_DAT = readtable([InP_FILE{find(InP_FILE(:,1)==["FOLDER"]),2},InP_FILE{find(InP_FILE(:,1)==["FORC"]),2}],'FileType','text');
-    for i=1:t_dur/deltaT_wea
+    for i=1:ceil(t_dur/deltaT_wea)
         forcingsraw(i,:) = [FORC_DAT.TA(i),FORC_DAT.SR(i),FORC_DAT.WD(i),FORC_DAT.VP(i),FORC_DAT.RH(i),FORC_DAT.PA(i)];
     end 
     % Processing data: 0: for cummulative rainfall, 1: constant, 2: linear interpolation 
-    forcingets(:,1) = processing(forcingsraw(:,1),deltaT,deltaT_wea,t_dur,0);                  % Air temperature, degrees celsius
-    forcingets(:,2) = processing(forcingsraw(:,2),deltaT,deltaT_wea,t_dur,0);                  % Incoming shortwave radiation, W/m2
-    forcingets(:,3) = processing(forcingsraw(:,3),deltaT,deltaT_wea,t_dur,0);                  % Wind speed, m/s
-    forcingets(:,4) = processing(forcingsraw(:,4),deltaT,deltaT_wea,t_dur,0);                  % Air vapor pressure, kPa
-    forcingets(:,5) = processing(forcingsraw(:,5),deltaT,deltaT_wea,t_dur,0);                  % Relative humidity, kg/kg
-    forcingets(:,6) = processing(forcingsraw(:,6),deltaT,deltaT_wea,t_dur,0);                  % Atmospheric pressure, kPa
+    forcingets(:,1) = forcingsraw(:,1);                  % Air temperature, degrees celsius
+    forcingets(:,2) = forcingsraw(:,2);                  % Incoming shortwave radiation, W/m2
+    forcingets(:,3) = forcingsraw(:,3);                  % Wind speed, m/s
+    forcingets(:,4) = forcingsraw(:,4);                  % Air vapor pressure, kPa
+    forcingets(:,5) = forcingsraw(:,5);                  % Relative humidity, kg/kg
+    forcingets(:,6) = forcingsraw(:,6);                  % Atmospheric pressure, kPa
     clearvars i FORC_DAT forcingsraw;
 end
               
 % Read manholes (nodes) from sewer system
 if moddrain == 1
+    if exist('read1D','file') ~= 3 && exist('read1D','file') ~= 2
+        error('OFM:SWMMDependency','A read1D binary for this MATLAB platform is required. The repository supplies Windows binaries.');
+    end
+    if DELTA_T1D < 1 || abs(DELTA_T1D-round(DELTA_T1D)) > 1e-9 || abs(t_dur-round(t_dur)) > 1e-9
+        error('OFM:CouplingStep','DELTA_T1D must be a positive whole number of seconds.');
+    end
     % Read input for Drainage model
     idx = find(InP_FILE(:,1)=='DRAI');
     opts = delimitedTextImportOptions("NumVariables", 11);
@@ -440,16 +469,16 @@ if moddrain == 1
     DRAI_DAT{idx,2} =   datestr(Start_Date,'HH:MM:SS');                                         % Report Start Time
     
     idx = find(DRAI_DAT(:,1) == ["REPORT_STEP"]);
-    DRAI_DAT{idx,2} =   datestr(datetime(0000,00,00) + seconds(deltaT),'HH:MM:SS');             % Report step
+    DRAI_DAT{idx,2} =   char(duration(0,0,max(1,deltaT),'Format','hh:mm:ss'));             % Report step
     
     idx = find(DRAI_DAT(:,1) == ["WET_STEP"]);
-    DRAI_DAT{idx,2} =   datestr(datetime(0000,00,00) + seconds(deltaT),'HH:MM:SS');             % Report step
+    DRAI_DAT{idx,2} =   char(duration(0,0,max(1,deltaT),'Format','hh:mm:ss'));             % Report step
     
     idx = find(DRAI_DAT(:,1) == ["DRY_STEP"]);
-    DRAI_DAT{idx,2} =   datestr(datetime(0000,00,00) + seconds(deltaT),'HH:MM:SS');             % Report step
+    DRAI_DAT{idx,2} =   char(duration(0,0,max(1,deltaT),'Format','hh:mm:ss'));             % Report step
     
     idx = find(DRAI_DAT(:,1) == ["ROUTING_STEP"]);
-    DRAI_DAT{idx,2} =   datestr(datetime(0000,00,00) + seconds(deltaT),'HH:MM:SS');             % Report step
+    DRAI_DAT{idx,2} =   char(duration(0,0,max(1,deltaT),'Format','hh:mm:ss'));             % Report step
     
     for nn = 1:n_node
         ID_nodes{nn} = DRAI_DAT{find(DRAI_DAT(:,1)==["[COORDINATES]"])+nn+2,1};                 % Node name
@@ -468,9 +497,9 @@ if moddrain == 1
             x = x_node_c + j * s_grid - s_grid/2;
             y = y_node_c - i * s_grid + s_grid/2;
             for k=1:n_node
-                if  abs(x-x_node(k,1)) <= s_grid/2 && abs(y-y_node(k,1)) <= s_grid/2
+                if j == floor((x_node(k,1)-x_cor)/s_grid)+1 && i == floor((y_cor+n_row*s_grid-y_node(k,1))/s_grid)+1
                     node_ad(i,j) = k;
-                    node_invert(i,j) = z_node(k,1);
+                    node_invert(i,j) = dem(i,j)-h_node(k,1); % rim-to-invert depth
                 end
             end
         end
@@ -509,7 +538,7 @@ if out_free == 1
             x = x_node_c + j * s_grid - s_grid/2;
             y = y_node_c - i * s_grid + s_grid/2;
             for k=1:n_ofree
-                if  abs(x-x_ofree(k,1)) <= s_grid/2 && abs(y-y_ofree(k,1)) <= s_grid/2
+                if j == floor((x_ofree(k,1)-x_cor)/s_grid)+1 && i == floor((y_cor+n_row*s_grid-y_ofree(k,1))/s_grid)+1
                     ofree_ad(i,j) = k;
                 end
             end
@@ -543,10 +572,12 @@ vexcess = 0.;
 vinftot = 0.;                                           % Total volume of infiltration
 amincdepth = 0.;
 amaxcdepth = 0.;
-Qpeak = 0;                                              % Maximum discharge at outlet
+Qpeak = zeros(1,n_chout);                                              % Maximum discharge at outlet
 
 % For OFM
-oflow(1:n_row,1:n_col) = 0;                             % Overland flow
+oflow = max(0,inil);
+oflow(~active | shp == 1 | (shp == 2 & modchn == 1)) = 0;
+%                             % Overland flow
 of_rate(1:n_row,1:n_col) = 0;                           % Overland flow rate
 chn_rate(1:n_row,1:n_col) = 0;                          % Channel flow rate
 v_infil(1:n_row,1:n_col) = 0;                           % Infiltration depth = water table
@@ -597,12 +628,27 @@ gwfl(1:n_row,1:n_col) = 0;                              % streamflow from ground
 seep(1:n_row,1:n_col) = 0;                              % deep seepage loss from groundwater, mm/d
 
 % For Drainage
-surcharge_at_t(1:n_node) = 0;                           % Initial surcharge flow
-node_depth_at_t(1:n_node) = 0;                          % Initial water depth of manhole
-q_to_freeoutlet = 0;
+surcharge_at_t = zeros(1,n_node);                           % Initial surcharge flow
+node_depth_at_t = zeros(1,n_node);                          % Initial water depth of manhole
+q_to_freeoutlet = [];
+node_surch = []; node_depth = []; link_flow = []; out_flow = []; out_depth = [];
+q_to_manhole = zeros(1,n_node);
+q_to_manhole_sum = zeros(1,n_node);
+if moddrain == 1
+    couplingSteps = round(DELTA_T1D/deltaT);
+    if couplingSteps < 1 || abs(couplingSteps*deltaT-DELTA_T1D) > 1e-8*DELTA_T1D
+        error('OFM:CouplingStep','DELTA_T1D must be a positive whole multiple of DELTA_T.');
+    end
+end
 
 Temp_folder = ['Results/',InP_FILE{find(InP_FILE(:,1)==["RES_GEN"]),2}];
-mkdir(Temp_folder)
+% Give every run a separate directory so incomplete or older runs cannot mix.
+if ~exist(Temp_folder,'dir'), mkdir(Temp_folder); end
+[~,run_id] = fileparts(tempname);
+Temp_folder = fullfile(Temp_folder,['run_',run_id]);
+mkdir(Temp_folder);
+save(fullfile(Temp_folder,'metadata.mat'),'dem','shp','head_plot','deltaT', ...
+    'Start_Date','End_Date','n_row','n_col','NT_RunOF','-v7.3');
 display(' ');
 
 
@@ -617,7 +663,7 @@ display(' ');
 % ##################################################################################################################################################
 
 % Time iterations (t)
-T_export = NT_REP;
+% Snapshots are written after every computational step.
 t_save = 0;
 T_warning = NT_WAR;
 t1D = 1;
@@ -630,11 +676,24 @@ for t = 1:NT_RunOF
         display(['             Rainfall-Runoff Model is running . . .']);
     end
     
+    q_to_manhole(:) = 0;
+    q_to_freeoutlet(:) = 0;
+    q_out = zeros(1,n_chout);
+    Qout = zeros(1,n_chout);
+    if n_boun > 0
+        boundary_at_t = sample_forcing(boundary_dat,t,deltaT,deltaT_bound,2,false);
+    end
+    if modint == 1
+        forcingint_at_t = sample_forcing(forcingint,t,deltaT,deltaT_wea,0,false);
+    end
+    if modets == 1
+        forcingets_at_t = sample_forcing(forcingets,t,deltaT,deltaT_wea,0,false);
+    end
     % Read rainfall
     if id_rain == 1
-        RAIN_at_t = rainfall(t,:);                                          % Local rainfall       
+        RAIN_at_t = sample_forcing(rainfall,t,deltaT,deltaT_rain,1,false);                                          % Local rainfall
     elseif id_rain == 0
-        RAIN_at_t = rainfall(:,:,t);                                        % Gridded rainfall
+        RAIN_at_t = sample_forcing(rainfall,t,deltaT,deltaT_rain,1,true);                                        % Gridded rainfall
     end
     
     % Apply the rainfall to each grid cell within the watershed in order to
@@ -647,7 +706,7 @@ for t = 1:NT_RunOF
                 if shp(x,y) == 5                                        % Free boundary
                     oflow(x,y) = 0;
                 elseif shp(x,y) == 4                                    % Soft boundary with water elevation
-                    oflow(x,y) = boundary_dat(t,bshape(x,y)) - dem(x,y);
+                    oflow(x,y) = max(0,boundary_at_t(bshape(x,y))-dem(x,y));
                 end
             end
         end
@@ -675,7 +734,7 @@ for t = 1:NT_RunOF
                 if modets == 1
                     % Use Energy balance model
                     [act_evap(x,y) evap_EB] = evapotrans(Start_Date,deltaT,t, x_cor,y_cor,n_row,x,y,s_grid,areazone,...
-                                                forcingets(t,:),lai(x,y), vegheight(x,y), tcan(x,y),...
+                                                forcingets_at_t,lai(x,y), vegheight(x,y), tcan(x,y),...
                                                 albs(x,y), albv(x,y), emis(x,y), emiv(x,y),rain_int(x,y),oflow(x,y),stor(x,y),...
                                                 G_daylightSavings, G_Zair, G_Zu, G_stefBoltz, G_Rv, G_cP, G_mW, G_mA, G_rhow, G_esA, G_esB, G_esC, G_kappa);
                     % display('EVAPOTRANSPIRATION MODEL OK');
@@ -690,7 +749,7 @@ for t = 1:NT_RunOF
                 if modint == 1
                      % Use Rutter–Gash canopy formulation
                      [canopystore(x,y), snowpackstore(x,y), throughfall(x,y), snowmetl(x,y),et_soil(x,y),et_canopy(x,y),act_lum,evap(x,y)]=intercsnow(deltaT,rain_int(x,y),...
-                                                forcingint(t,:),albs(x,y),lai(x,y),vegheight(x,y),canopystore(x,y),snowpackstore(x,y),oflow(x,y),stor(x,y),...
+                                                forcingint_at_t,albs(x,y),lai(x,y),vegheight(x,y),canopystore(x,y),snowpackstore(x,y),oflow(x,y),stor(x,y),...
                                                 G_stefBoltz, G_kappa, G_lambdalh, G_rhoa, G_Cp, G_Rv, G_pfreez, G_Gam_ma, G_Ds, G_candec, G_F, G_zwd, G_Rc); 
 %                   display('CANOPY OK');
                     % 
@@ -701,11 +760,16 @@ for t = 1:NT_RunOF
                 tot_act_evap(x,y) = tot_act_evap(x,y) + act_evap(x,y)*deltaT;
                 
                 % Compute temporary water depth from the effective rainfall and evapotranspiration
-                of_rate(x,y) = rain_int(x,y) - evap(x,y);
+                if modint == 1
+                    of_rate(x,y) = throughfall(x,y) + snowmetl(x,y) - et_soil(x,y);
+                else
+                    of_rate(x,y) = rain_int(x,y) - evap(x,y);
+                end
+                of_rate(x,y) = max(of_rate(x,y),-oflow(x,y)/deltaT);
                 
                 % COMPUTE INFLOW - OUTFLOW FROM POINT SOURCES -------------
                 if shp(x,y) == 6                                                                % Soft boundary with water inflow [m3/s]
-                    of_rate(x,y) = of_rate(x,y) + boundary_dat(t,bshape(x,y)) / s_grid^2;
+                    of_rate(x,y) = of_rate(x,y) + boundary_at_t(bshape(x,y)) / s_grid^2;
                 end
                 if outsc == 1
                     %                     of_rate(x,y) = 0;
@@ -731,7 +795,7 @@ for t = 1:NT_RunOF
                         % FLUXES MODEL is NOT selected.
                         % =========================================================
                         [of_rate(x,y),baseflow(x,y),slow_interflow(x,y),fast_interflow(x,y),sat_storage(x,y),unsat_storage(x,y),perc(x,y)] = runoffsimp...
-                            (pa_runoff,runof_reg(x,y),inf_rate(x,y),sat_storage(x,y), unsat_storage(x,y),of_rate(x,y));
+                            (pa_runoff,runof_reg(x,y),inf_rate(x,y),sat_storage(x,y), unsat_storage(x,y),of_rate(x,y),deltaT);
                     end
                 end
                 
@@ -760,14 +824,14 @@ for t = 1:NT_RunOF
                 % Compute flow to the manhole
                 if moddrain == 1
                     if node_ad(x,y) ~= -9999
-                        [q_to_manhole(t,node_ad(x,y)), of_rate(x,y)] = qmanhole(deltaT,s_grid,s_dep(x,y),oflow(x,y),of_rate(x,y),node_depth_at_t(node_ad(x,y)),dem(x,y),node_invert(x,y));
+                        [q_to_manhole(1,node_ad(x,y)), of_rate(x,y)] = qmanhole(deltaT,s_grid,s_dep(x,y),oflow(x,y),of_rate(x,y),node_depth_at_t(node_ad(x,y)),dem(x,y),node_invert(x,y));
                     end
                 end
                 
                 % Compute flow to the manhole
                 if out_free == 1 && ofree_ad(x,y) ~= -9999
-                    q_to_freeoutlet(t,ofree_ad(x,y)) = qnode(deltaT,of_rate(x,y),s_grid,s_dep(x,y),oflow(x,y));
-                    of_rate(x,y) = of_rate(x,y) - q_to_freeoutlet(t,ofree_ad(x,y)) / s_grid^2;
+                    q_to_freeoutlet(1,ofree_ad(x,y)) = qnode(deltaT,of_rate(x,y),s_grid,s_dep(x,y),oflow(x,y));
+                    of_rate(x,y) = of_rate(x,y) - q_to_freeoutlet(1,ofree_ad(x,y)) / s_grid^2;
                 end
             end
         end
@@ -776,12 +840,13 @@ for t = 1:NT_RunOF
    %% ===========================================================================================================================================
     % COMPUTE OVERLAND FLOW MODEL
     % ===========================================================================================================================================
+    fixedDepth = oflow;
     if TSP2D == 1
         %% ======================================================================================================================================
-        % Use Implicit scheme for timestepping
+        % Legacy sequential routing
         % =======================================================================================================================================
         if t == 1 || t == T_warning
-            display(['             Overfland Flow Model is running with Implicit scheme . . .']);
+            display(['             Overland Flow Model is running with sequential routing . . .']);
         end
         for x = 1:n_row
             for y = 1:n_col
@@ -807,10 +872,10 @@ for t = 1:NT_RunOF
         % Use Explicit scheme for timestepping: Adaptive timestepping solution to maintain stability of OFM
         % ===========================================================================================================================================
         if t == 1 || t == T_warning
-            display(['             Overfland Flow Model is running with Explicit scheme. . .']);
+            display(['             Overland Flow Model is running with Explicit scheme. . .']);
         end
         
-        [of_rate,uvfluxs] = explicit2(TSP2D,shp,n_row,n_col,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate);
+        [of_rate,uvfluxs] = explicit2(TSP2D,shp,n_row,n_col,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,fixedDepth);
         %         Res_flowvec(:,:,:,t) = uvfluxs;
         
     end
@@ -819,52 +884,33 @@ for t = 1:NT_RunOF
     % ===========================================================================================================================================
     % COMPUTE DRAINAGE ROUTING
     % ===========================================================================================================================================
+    drainage_updated = false;
     if moddrain == 1
-        if t == 1 && t == (t1D * round(DELTA_T1D/deltaT)) || t == T_warning &&  t == (t1D * round(DELTA_T1D/deltaT))
-            display(['             Drainage Model is running . . .']);
-        end
-        if t == (t1D * round(DELTA_T1D/deltaT))
-            cd src\;                                                                                            % Move to the created temporary folder
-            
-                % Older version
-%             [node_surch(t1D,:) node_depth(t1D,:) link_flow(t1D,:) out_flow(t1D,:)] = drainage_old(ID_nodes,...
-%                 ID_links, ID_out,DRAI_DAT,Start_Date,DELTA_T1D,deltaT,t,t1D,n_node,q_to_manhole);
-            % New version
-            [node_surch(t1D,:), node_depth(t1D,:), link_flow(t1D,:), out_flow(t1D,:), out_depth(t1D,:)] = drainage(n_node, n_out,DRAI_DAT,Start_Date,DELTA_T1D,...
-                                                                                    deltaT,t,t1D,q_to_manhole);
-            
-            surcharge_at_t = node_surch(t1D,:);
-            node_depth_at_t = node_depth(t1D,:);
-            
-            % Clean trash
-%             if exist('Nodes') == 7
-%                 rmdir('Nodes', 's');
-%             end
-%             if exist('Links') == 7
-%                 rmdir('Links', 's');
-%             end
-%             if exist('Subcatchments') == 7
-%                 rmdir('Subcatchments', 's');
-%             end
-%             if exist('Time') == 7
-%                 rmdir('Time', 's');
-%             end
-            t1D = t1D + 1;
+        q_to_manhole_sum = q_to_manhole_sum + q_to_manhole;
+        intervalSteps = mod(t-1,couplingSteps)+1;
+        if intervalSteps == couplingSteps || t == NT_RunOF
+            cd(source_folder);
+            intervalDt = intervalSteps*deltaT;
+            intervalStart = Start_Date + seconds((t-intervalSteps)*deltaT);
+            [node_surch,node_depth,link_flow,out_flow,out_depth] = drainage( ...
+                n_node,n_out,DRAI_DAT,intervalStart,intervalDt,intervalDt,1,t1D, ...
+                q_to_manhole_sum/intervalSteps);
+            surcharge_at_t = node_surch;
+            node_depth_at_t = node_depth;
+            q_to_manhole_sum(:) = 0;
+            drainage_updated = true;
+            t1D = t1D+1;
             cd(current_folder);
         end
-    else
-        node_surch = [];
-        node_depth = [];
-        link_flow = [];
-        out_flow = [];
-        out_depth = [];
     end
-    
+
     % ===========================================================================================================================================
     % COMPUTE CHANNEL ROUTING
     % ===========================================================================================================================================
     % If there is a routing channel => Update the channel depth
+    visited_channel = false(n_row,n_col);
     if modchn == 1
+        chn_rate(:) = 0;
         for i = 1:n_chn
             w_chn = pa_chn(i,1);
             d_chn = pa_chn(i,2);
@@ -879,9 +925,10 @@ for t = 1:NT_RunOF
                 % last node of the link because the last node of one link is the
                 % the first node of the next link
                 % In the outlet link wr update depth in all nodes
-                if x > 0 && xx >= 0
+                if x > 0 && y > 0 && ~visited_channel(x,y)
                     % Find new channel depth after adding inflow volume
-                    vol_in = chn_rate(x,y) * deltaT;
+                    vol_in = 0;
+                    visited_channel(x,y) = true;
                     
                     % The flow comes from the overland (vol_ov_in)
                     if s_dep(x,y) > d_chn
@@ -893,7 +940,7 @@ for t = 1:NT_RunOF
                     
                     if oflow(x,y) + of_rate(x,y) * deltaT > s_dep_of
                         vol_ov_in = (oflow(x,y) + of_rate(x,y) *deltaT - s_dep_of) * s_grid^2;
-                        of_rate(x,y) = - (oflow(x,y) + of_rate(x,y) *deltaT - s_dep_of) / deltaT;
+                        of_rate(x,y) = (s_dep_of-oflow(x,y))/deltaT;
                         % THIS IS THE REASON WHY oflow(x,y) EQUAL TO ZERO AT OUTLET
                     end
                     tot_vol_chn = vol_in + vol_ov_in;
@@ -920,7 +967,7 @@ for t = 1:NT_RunOF
                 % When ad_chn(i,j+1,1) is less than zero, then that indicates that the channel
                 % routing for the current link is complete. There is no routing for the outlet
                 % cell
-                if ad_chn(i,j+1,1) > 0
+                if ad_chn(i,j,1) > 0 && ad_chn(i,j+1,1) > 0
                     [q_chn chn_rate] = chnroutin(deltaT,n_chn,s_grid,j,i,dem,s_dep,inil,ad_chn,pa_chn,chn_rate,n_flow,locat_flow);
                 end
             end
@@ -933,32 +980,63 @@ for t = 1:NT_RunOF
     % the channel depth, q_out = 0 when the channel routing is selected
     for iout = 1:n_chout
         % Calculate the flow going out from the overland portion
-        pflow = sqrt(slop_out(iout)) / Man_out;
-        q_out(t,iout) = qoutlet(s_grid,deltaT,oflow,x_out,y_out,iout,of_rate,D_out,W_out,pflow);             
+        pflow = sqrt(slop_out(iout)) / Man_out(iout);
+        q_out(iout) = qoutlet(s_grid,deltaT,oflow,x_out,y_out,iout,of_rate,D_out,W_out,pflow);
 %         if oflow(x_out(iout),y_out(iout)) + of_rate(x_out(iout),y_out(iout)) * deltaT > D_out(iout)
-%             q_out(t,iout) = W_out(iout) * pflow * ((oflow(x_out(iout),y_out(iout)) + of_rate(x_out(iout),y_out(iout)) * deltaT - D_out(iout))^(5/3));
+%             q_out(iout) = W_out(iout) * pflow * ((oflow(x_out(iout),y_out(iout)) + of_rate(x_out(iout),y_out(iout)) * deltaT - D_out(iout))^(5/3));
 %         else
-%             q_out(t,iout) = 0;
+%             q_out(iout) = 0;
 %         end
         
         % Overland water depth at outlet cell is reduced after taking the outflow out of the cell
-        of_rate(x_out(iout),y_out(iout)) = of_rate(x_out(iout),y_out(iout)) - q_out(t,iout) / s_grid^2;
+        of_rate(x_out(iout),y_out(iout)) = of_rate(x_out(iout),y_out(iout)) - q_out(iout) / s_grid^2;
         
-        % Calculate the flow going out from the channel portion
-        if modchn == 1 && inil(x_out(iout),y_out(iout)) > s_dep(x_out(iout),y_out(iout))
-            hout = inil(x_out(iout),y_out(iout)) - s_dep(x_out(iout),y_out(iout));
-            qchn_out = cflow(deltaT,s_grid,inil(x_out,y_out),hout,w_chn,d_chn,s_dep(x_out(iout),y_out(iout)),Man_out,slopchn);
-            chn_rate(x_out(iout),y_out(iout)) = chn_rate(x_out(iout),y_out(iout)) - qchn_out;
+        % Limit the channel outlet using storage after pending internal fluxes.
+        if modchn == 1
+            x = x_out(iout); y = y_out(iout);
+            outletFactor = 1;
+            for ci = 1:n_chn
+                if any(ad_chn(ci,:,1) == x & ad_chn(ci,:,2) == y)
+                    outletFactor = pa_chn(ci,4); break;
+                end
+            end
+            predicted = cdepth(s_grid,W_out(iout),D_out(iout),outletFactor, ...
+                x,y,chn_rate(x,y)*deltaT,inil);
+            hout = max(0,predicted-s_dep(x,y));
+            qchn_out = cflow(deltaT,s_grid,predicted,hout,W_out(iout), ...
+                D_out(iout),s_dep(x,y),Man_out(iout),slopchn(iout),outletFactor);
+            chn_rate(x,y) = chn_rate(x,y)-qchn_out;
+            % Outlets absent from the channel links still need their storage updated.
+            if n_chn == 0 || ~visited_channel(x,y)
+                inil(x,y) = cdepth(s_grid,W_out(iout),D_out(iout),outletFactor, ...
+                    x,y,chn_rate(x,y)*deltaT,inil);
+                chn_rate(x,y) = 0;
+            end
         else
             qchn_out = 0;
         end
-        
+
         % The total outflow at the basin's outlet is given by adding the outflow from the overland & channel portion of the cell
-        Qout(t,iout) = q_out(t,iout) + qchn_out;
-        vout = vout + Qout(t) * deltaT;
-        if Qout(t,iout) > Qpeak(iout)
-            Qpeak(iout) = Qout(t,iout);
+        Qout(iout) = q_out(iout) + qchn_out;
+        vout = vout + Qout(iout) * deltaT;
+        if Qout(iout) > Qpeak(iout)
+            Qpeak(iout) = Qout(iout);
         end
+    end
+    % Commit internal channel transfers in this step, once per shared node.
+    if modchn == 1
+        visited_channel(:) = false;
+        for ci = 1:n_chn
+            for cj = 1:max_chn
+                x = ad_chn(ci,cj,1); y = ad_chn(ci,cj,2);
+                if x > 0 && y > 0 && ~visited_channel(x,y)
+                    inil(x,y) = cdepth(s_grid,pa_chn(ci,1),pa_chn(ci,2), ...
+                        pa_chn(ci,4),x,y,chn_rate(x,y)*deltaT,inil);
+                    visited_channel(x,y) = true;
+                end
+            end
+        end
+        chn_rate(:) = 0;
     end
     %%
     % ===========================================================================================================================================
@@ -984,13 +1062,12 @@ for t = 1:NT_RunOF
             end
         end
     end
-        % Modify the water depth from negative value (verry small values ~
-        % -0.001 m) to zero value.
-        if -0.0001 < min(oflow(:)) < 0
-%             pause
-            oflow(oflow<0) = 0;
-        end
-        
+    oflow(shp == 4 | shp == 5) = fixedDepth(shp == 4 | shp == 5);
+    if any(~isfinite(oflow(active))) || any(oflow(active) < -1e-10)
+        error('OFM:InvalidDepth','Invalid surface depth at step %d.',t);
+    end
+    oflow(active) = max(oflow(active),0);
+
     %% ===========================================================================================================================================
     % REPORT RESULTS
     % ===========================================================================================================================================
@@ -1010,36 +1087,11 @@ for t = 1:NT_RunOF
             T_warning = T_warning + NT_WAR;
         end
     end
-    % Export resuts -----------------------------------
-%     for x = 1:n_row
-%         for y = 1:n_col
-%             if shp(x,y) == -9999
-%                 Res_raindepth(x,y,t) = -9999;
-%                 Res_vol(x,y,t) = -9999;
-%                 Res_flooddepth(x,y,t) = -9999;
-%                 inun_max(x,y) = -9999;
-%             elseif shp(x,y) == 2
-%                 Res_raindepth(x,y,t) = rain_int(x,y);
-%                 Res_vol(x,y,t) = v_infil(x,y);
-%                 Res_flooddepth(x,y,t) = inil(x,y);
-%                 if inil(x,y) > inun_max(x,y)
-%                     inun_max(x,y) = inil(x,y);
-%                 end
-%             else
-%                 Res_raindepth(x,y,t) = rain_int(x,y);
-%                 Res_vol(x,y,t) = v_infil(x,y);
-%                 Res_flooddepth(x,y,t) = oflow(x,y);
-%                 if oflow(x,y) > inun_max(x,y)
-%                     inun_max(x,y) = oflow(x,y);
-%                 end
-%             end
-%         end
-%     end
     for x = 1:n_row
         for y = 1:n_col
             if shp(x,y) == -9999
                 inun_max(x,y) = -9999;
-            elseif shp(x,y) == 2
+            elseif shp(x,y) == 2 && modchn == 1
                 if inil(x,y) > inun_max(x,y)
                     inun_max(x,y) = inil(x,y);
                 end
@@ -1052,108 +1104,96 @@ for t = 1:NT_RunOF
     end
     
     
-    if t == T_export
-        t_save = t_save+1;
-        Waterdepth(:,:,t_save) = oflow;
-        WaterVec(:,:,t_save) = of_rate;
-        for x = 1:n_row
-            for y = 1:n_col
-                if shp(x,y) == -9999
-                    Results.Exp_rain(x,y) = -9999;
-                    Results.Exp_vol(x,y) = -9999;
-                    Results.Exp_flo(x,y,t_save) = -9999;
-                elseif shp(x,y) == 2
-                    Results.Exp_rain(x,y) = rain_int(x,y);
-                    Results.Exp_vol(x,y) = v_infil(x,y);
-                    Results.Exp_flo(x,y,t_save) = inil(x,y);
-                else
-                    Results.Exp_rain(x,y) = rain_int(x,y);
-                    Results.Exp_vol(x,y) = v_infil(x,y);
-                    Results.Exp_flo(x,y,t_save) = oflow(x,y);
-                end
+    % Write this step only. No gridded output history is retained.
+    t_save = t_save+1;
+    Waterdepth = oflow;
+    WaterVec = of_rate;
+    for x = 1:n_row
+        for y = 1:n_col
+            if shp(x,y) == -9999
+                Results.Exp_rain(x,y) = -9999;
+                Results.Exp_vol(x,y) = -9999;
+                Results.Exp_flo(x,y) = -9999;
+            elseif shp(x,y) == 2 && modchn == 1
+                Results.Exp_rain(x,y) = rain_int(x,y);
+                Results.Exp_vol(x,y) = v_infil(x,y);
+                Results.Exp_flo(x,y) = inil(x,y);
+            else
+                Results.Exp_rain(x,y) = rain_int(x,y);
+                Results.Exp_vol(x,y) = v_infil(x,y);
+                Results.Exp_flo(x,y) = oflow(x,y);
             end
         end
-        Res_name = [Temp_folder,'/Res_t=',num2str(t*deltaT)];
-        if modint == 1
-            Results.canopystore = canopystore;
-            Results.snowpackstore = snowpackstore;
-            Results.throughfall = throughfall;
-            Results.snowmetl = snowmetl;
-            Results.act_evap(1:n_row,1:n_col) = act_evap;                   % Evapotranspiration
-            Results.et_canopy(1:n_row,1:n_col) = et_canopy;                 % Canopy Evapotranspiration
-            Results.et_soil(1:n_row,1:n_col) = et_soil;                     % Soil Evapotranspiration
-        end
-        if modets == 1
-            Results.act_evap(1:n_row,1:n_col) = act_evap;                   % Evapotranspiration
-        end
-        if modinf == 1
-            Results.ro = ro;                                                % Runoff potential
-            Results.stor = stor;                                            % Soil moisture
-            Results.inf_rate = inf_rate;                                    % Infiltration rate 
-            Results.v_infil = v_infil;                                      % Water table depth
-            Results.baseflow = baseflow;                                    % Baseflow
-            Results.slow_interflow = slow_interflow;                        % Slow interflow 
-            Results.fast_interflow = fast_interflow;                        % Fast interflow
-            Results.sat_storage = sat_storage;                              % Groundwater storage
-            Results.unsat_storage = unsat_storage;                          % Upper soil storage
-            Results.perc = perc;                                            % Percolation
-        end
-        if moddrain == 1
-            Results.q_to_manhole = q_to_manhole; 
-            Results.node_surch = node_surch;
-            Results.node_depth = node_depth;
-            Results.link_flow = link_flow;
-            Results.out_flow = out_flow;
-            Results.out_depth = out_depth;
-        end
-        if modswf == 1
-            Results.psim = psim;                                            % matric soil water potential, kPa  
-            Results.gwat = gwat;                                            % groundwater storage below soil layers, mm
-            Results.vrfli = vrfli;                                          % vertical drainage rate from layer i, m/d
-            Results.infli = infli;                                          % infiltration rate into layer, m/d
-            Results.byfli = byfli;                                          % bypass flow rate from layer, m/d
-            Results.dsfli = dsfli;                                          % downslope flow rate from layer, m/d
-            Results.ntfli = ntfli;                                          % net flow rate into layer, m/d
-            Results.trani = trani;                                          % transpiration rate from layer, m/d
-            Results.swat = swat;                                            % total soil water in all layers, mm
-            Results.gwfl = gwfl;                                            % streamflow from groundwater discharge, mm/d
-            Results.seep = seep;                                            % deep seepage loss from groundwater, mm/d
-        end
-        save([Res_name,'.mat'],'Results','-v7.3');
-        Exp_flo = Results.Exp_flo(:,:,t_save);
-%         save([Res_name,'.txt'],'Exp_flo','-ascii');                         % Inundation at t*deltaT
-        save([Temp_folder,'/MaxInundation.txt'],'inun_max','-ascii');       % Maximum inundation depth
-
-        % Update time to export
-        T_export = T_export + NT_REP;
-        
-        % Visualize inundation map at time t
-%         visualize(Exp_flo,head_plot,t,deltaT,dem,n_row,n_col)
-%         pause(1)
     end
+    Results.Step = t;
+    Results.TimeSeconds = t*deltaT;
+    Results.DateTime = Start_Date+seconds(t*deltaT);
+    Results.OutputDirectory = Temp_folder;
+    Results.StepsWritten = t_save;
+    Res_name = fullfile(Temp_folder,sprintf('step_%09d.mat',t));
+    if modint == 1
+        Results.canopystore = canopystore;
+        Results.snowpackstore = snowpackstore;
+        Results.throughfall = throughfall;
+        Results.snowmetl = snowmetl;
+        Results.act_evap(1:n_row,1:n_col) = act_evap;                   % Evapotranspiration
+        Results.et_canopy(1:n_row,1:n_col) = et_canopy;                 % Canopy Evapotranspiration
+        Results.et_soil(1:n_row,1:n_col) = et_soil;                     % Soil Evapotranspiration
+    end
+    if modets == 1
+        Results.act_evap(1:n_row,1:n_col) = act_evap;                   % Evapotranspiration
+    end
+    if modinf == 1
+        Results.ro = ro;                                                % Runoff potential
+        Results.stor = stor;                                            % Soil moisture
+        Results.inf_rate = inf_rate;                                    % Infiltration rate
+        Results.v_infil = v_infil;                                      % Water table depth
+        Results.baseflow = baseflow;                                    % Baseflow
+        Results.slow_interflow = slow_interflow;                        % Slow interflow
+        Results.fast_interflow = fast_interflow;                        % Fast interflow
+        Results.sat_storage = sat_storage;                              % Groundwater storage
+        Results.unsat_storage = unsat_storage;                          % Upper soil storage
+        Results.perc = perc;                                            % Percolation
+    end
+    if moddrain == 1
+        Results.q_to_manhole = q_to_manhole;
+        Results.node_surch = node_surch;
+        Results.node_depth = node_depth;
+        Results.link_flow = link_flow;
+        Results.out_flow = out_flow;
+        Results.out_depth = out_depth;
+        Results.drainage_updated = drainage_updated;
+    end
+    if modswf == 1
+        Results.psim = psim;                                            % matric soil water potential, kPa
+        Results.gwat = gwat;                                            % groundwater storage below soil layers, mm
+        Results.vrfli = vrfli;                                          % vertical drainage rate from layer i, m/d
+        Results.infli = infli;                                          % infiltration rate into layer, m/d
+        Results.byfli = byfli;                                          % bypass flow rate from layer, m/d
+        Results.dsfli = dsfli;                                          % downslope flow rate from layer, m/d
+        Results.ntfli = ntfli;                                          % net flow rate into layer, m/d
+        Results.trani = trani;                                          % transpiration rate from layer, m/d
+        Results.swat = swat;                                            % total soil water in all layers, mm
+        Results.gwfl = gwfl;                                            % streamflow from groundwater discharge, mm/d
+        Results.seep = seep;                                            % deep seepage loss from groundwater, mm/d
+    end
+    if modchn == 1, Results.ChannelDepth = inil; end
+    Results.q_to_freeoutlet = q_to_freeoutlet;
+    Results.q_out = q_out;
+    Results.Qout = Qout;
+    save(Res_name,'Results','Waterdepth','WaterVec','-v7.3');
 end
 
-% Draw maximum inundation
-visualize(inun_max,head_plot,t,deltaT,dem,n_row,n_col);
-% Clean trash
-cd src\;
-if exist('PCUW1D_HS') > 0
-    delete PCUW1D_HS;
-end
-if exist('PCUW1D.OUT') > 0
-    delete PCUW1D.OUT;
-end
-if exist('PCUW1D.RPT') > 0
-    delete PCUW1D.RPT;
-end
-if exist('PCUW1D.txt') > 0
-    delete PCUW1D.txt;
-end
-cd(current_folder);
 FinalTime = toc;
-% Save all results
-Res_name = ['Results/',InP_FILE{find(InP_FILE(:,1)==["RES_GEN"]),2},'.mat'];
-save(Res_name,'Results','inun_max','dem','Waterdepth','WaterVec','oflow','head_plot','deltaT','n_row','n_col','FinalTime','-v7.3');
+Res_name = fullfile(Temp_folder,'summary.mat');
+save(Res_name,'Results','inun_max','dem','oflow','head_plot','deltaT', ...
+    'n_row','n_col','FinalTime','Qpeak','vin','vout','vinftot','-v7.3');
+save(fullfile(Temp_folder,'MaxInundation.txt'),'inun_max','-ascii');
+if options.Plot
+    visualize(inun_max,head_plot,t,deltaT,dem,n_row,n_col);
+end
+% Restore the caller's directory even if the simulation raises an error.
+
 end
 
 %% #################################################################################################################################################

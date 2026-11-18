@@ -45,7 +45,7 @@ rhoA = (44.6*PA*273.15)/(101.3*TA_K);                           % Molar density 
 % global G_daylightSavings G_Zair G_Zu G_stefBoltz G_Rv G_cP G_cP G_mW G_mA G_rhow G_esA G_esB G_esC G_kappa
 
 stime = datenum(Start_Date + seconds(deltaT) * t);
-[long lat] = coordinate(x_cor + x * s_grid - s_grid/2,y_cor + n_row * s_grid - y * s_grid + s_grid/2,areazone);
+[long lat] = coordinate(x_cor + y * s_grid - s_grid/2,y_cor + n_row * s_grid - x * s_grid + s_grid/2,areazone);
 dateVector = datevec(stime);                                    % Vector of datetime
 year = dateVector(1);                                           % Separate out year
 julianDay = floor(stime - datenum(year,01,01))+1;               % Julian day (1 = Jan 1, etc.)

@@ -1,49 +1,18 @@
-%============================================================================
-%   processing.m
-%
-%   Project:    OFM-Urban
-%   Version:    1.0
-%   Date:       2021/06/01
-%   Author:     Vinh Ngoc Tran
-%
-%   Program is to process the data according to selected deltaT
-%============================================================================
-
-function data = processing(dataraw, deltaT,dt,t_dur,type)
-
-% Check the size of raw data
-[x,y,z] = size(dataraw);
-
-% Generate time series data
-k = 0;
-if z == 1
-    for i = 1:t_dur/dt
-        for j = 1:dt/deltaT
-            k = k + 1;
-            if type == 1                    % For cummulative precipitation
-                data(k,:) = dataraw(i,:)/(dt/deltaT);
-            elseif type == 0                % Constant
-                data(k,:) = dataraw(i,:);
-            elseif type == 2                % Linear interpolation
-                data(k,:) = dataraw(i,:)+(dataraw(i+1,:)-dataraw(i,:))*j/(dt/deltaT);
-            end
-            
-        end
-    end
-    
-% Generate gridded data
+function data = processing(dataraw,deltaT,dt,t_dur,type)
+%PROCESSING Resample native records. Types: 0 mean, 1 total, 2 linear.
+validateattributes(deltaT,{'numeric'},{'scalar','positive','finite'});
+steps = round(t_dur/deltaT);
+if abs(steps*deltaT-t_dur) > 1e-8*max(1,t_dur)
+    error('OFM:TimeStep','Duration must be a whole number of DELTA_T steps.');
+end
+gridded = ndims(dataraw) == 3;
+if gridded
+    data = zeros(size(dataraw,1),size(dataraw,2),steps);
 else
-    for i = 1:t_dur/dt
-        for j = 1:dt/deltaT
-            k = k + 1;
-            if type == 1                    % For precipitation
-                data(:,:,k) = dataraw(:,:,i)/(dt/deltaT);
-            elseif type == 0                % Constant
-                data(:,:,k) = dataraw(:,:,i);
-            elseif type == 2                % Linear interpolation
-                data(:,:,k) = dataraw(:,:,i)+(dataraw(:,:,i+1)-dataraw(:,:,i))*j/(dt/deltaT);
-            end
-        end
-    end
+    data = zeros(steps,size(dataraw,2));
+end
+for k = 1:steps
+    value = sample_forcing(dataraw,k,deltaT,dt,type,gridded);
+    if gridded, data(:,:,k) = value; else, data(k,:) = value; end
 end
 end

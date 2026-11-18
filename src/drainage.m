@@ -72,117 +72,39 @@ swmm.sys.storedvolume     = 0;  %volume of stored water (ft3 or m3)
 swmm.sys.actevap          = 0;  %actual evaporation rate (in/day or mm/day)
 swmm.sys.potevap          = 0;  %potential evaporation rate (PET) (in/day or mm/day)
 
-%% Re-organize inflow to manhole according to DELTA_T1D
-if DELTA_T1D == deltaT
-    q_to_manhole = q_to_manhole_t;
-else
-    for dt = 1:t1D
-        q_to_manhole(dt,:) = mean(q_to_manhole_t((dt-1)*round(DELTA_T1D/deltaT)+1:dt*round(DELTA_T1D/deltaT),:));
-    end
+%% Run one interval. Only its mean surface inflow is retained by the caller.
+if exist('read1D','file') ~= 3 && exist('read1D','file') ~= 2
+    error('OFM:SWMMDependency','A read1D binary for this MATLAB platform is required. The repository supplies Windows binaries.');
 end
-
-% Update input for Drainage model
-% Update simulation time
-NEW_DRAI_DAT = DRAI_DAT;
-idx1 = find(NEW_DRAI_DAT(:,1) == ["[TIMESERIES]"]);
-idx2 = find(NEW_DRAI_DAT(:,1) == ["[INFLOWS]"]);
-if t1D == 1
-        
-    idx = find(NEW_DRAI_DAT(:,1) == ["END_DATE"]);
-    NEW_DRAI_DAT{idx,2} =   datestr(Start_Date + seconds(deltaT) * t,'mm/dd/yyyy');               % End Date   
-    idx = find(NEW_DRAI_DAT(:,1) == ["END_TIME"]);
-    NEW_DRAI_DAT{idx,2} =   datestr(Start_Date + seconds(deltaT) * t,'HH:MM:SS');                 % End Time
-    idx = find(NEW_DRAI_DAT(:,1) == '[FILES]');
-    NEW_DRAI_DAT{idx+2,1} = 'SAVE';
-    NEW_DRAI_DAT = fillmissing(NEW_DRAI_DAT,'constant',"");
-    
-    % Write input file
-    PCUW1D = fopen('PCUW1D.mdf','wt');
-    for iii = 1:idx1+2
-        fprintf(PCUW1D,'%s\t',NEW_DRAI_DAT(iii,:));
-        fprintf(PCUW1D,'\n');
-    end
-    % Write inflow to manhole: TimeSerie Name / Time / Inflow [cms]
-    for nod = 1: n_node
-        fprintf(PCUW1D,'%s\t',NEW_DRAI_DAT(idx2+2+nod,3),datestr(Start_Date + seconds(deltaT) * t,'mm-dd-yyyy HH:MM'),num2str(round(q_to_manhole(t1D,nod),5)));
-        fprintf(PCUW1D,'\n');
-    end
-    fclose(PCUW1D);
-    
+intervalStart = Start_Date+seconds(t*deltaT-DELTA_T1D);
+if size(q_to_manhole_t,1) == 1
+    inflow = q_to_manhole_t;
 else
-    OLD_DATE = ['END_DATE	',datestr(Start_Date + seconds(DELTA_T1D) * (t1D-1),'mm/dd/yyyy')];         % Old End Time
-    NEW_DATE = ['END_DATE	',datestr(Start_Date + seconds(deltaT) * t,'mm/dd/yyyy')];                  % New End Time 
-    OLD_Time = ['END_TIME	',datestr(Start_Date + seconds(DELTA_T1D) * (t1D-1),'HH:MM:SS')];           % Old End Time
-    NEW_Time = ['END_TIME	',datestr(Start_Date + seconds(deltaT) * t,'HH:MM:SS')];                    % New End Time
-    Hotstart = 'USE/SAVE	HOTSTART	PCUW1D_HS';
-    PCUW1D = fileread('PCUW1D.mdf');
-    PCUW1D = regexprep(PCUW1D, OLD_DATE, sprintf(NEW_DATE));
-    PCUW1D = regexprep(PCUW1D, OLD_Time, sprintf(NEW_Time));
-    if t1D==2
-        PCUW1D = regexprep(PCUW1D, 'SAVE	HOTSTART	PCUW1D_HS', sprintf(Hotstart));                 % Update Hotstart
-    end
-    fid = fopen('PCUW1D.mdf', 'w');
-    fwrite(fid, PCUW1D);
-    fclose(fid);
-    
-    % Write inflow to manhole: TimeSerie Name / Time / Inflow [cms]
-    fid = fopen('PCUW1D.mdf','a+');
-    for nod = 1: n_node
-        fprintf(fid, '\n');
-        fprintf(fid,'%s\t',NEW_DRAI_DAT(idx2+2+nod,3),datestr(Start_Date + seconds(deltaT) * t,'mm-dd-yyyy HH:MM'),num2str(round(q_to_manhole(t1D,nod),5)));
-    end
-    fclose(fid);
+    count = round(DELTA_T1D/deltaT);
+    inflow = mean(q_to_manhole_t(end-count+1:end,:),1);
 end
-
-%% MODEL SIMULATION
 infile = 'PCUW1D.mdf';
-if ~(libisloaded('swmm5'))
-    loadlibrary('swmm5');
+rpt_file = 'PCUW1D.rpt';
+out_file = 'PCUW1D.out';
+write_swmm_interval(infile,DRAI_DAT,n_node,inflow,intervalStart,DELTA_T1D,t1D);
+if ~libisloaded('swmm5'), loadlibrary('swmm5'); end
+cleanup = onCleanup(@close_swmm);
+check_swmm(calllib('swmm5','swmm_open',infile,rpt_file,out_file),'open');
+check_swmm(calllib('swmm5','swmm_start',1),'start');
+timePtr = libpointer('doublePtr',1e-6);
+while timePtr.Value > 0
+    check_swmm(calllib('swmm5','swmm_step',timePtr),'step');
 end
-rpt_file = strrep(lower(infile), '.mdf', '.rpt');
-out_file = strrep(lower(infile), '.mdf', '.out');
-error = calllib('swmm5','swmm_open',infile, rpt_file, out_file);
-if ~ismember(1, [0, 1])
-    if libisloaded('swmm5')
-        unloadlibrary swmm5;
-    end
-end
-if ~(libisloaded('swmm5'))
-    loadlibrary('swmm5');
-end
-error = calllib('swmm5','swmm_start', 1);
-elapsed_time = 1e-6;
-timePtr = libpointer('doublePtr', elapsed_time);
-while ~timePtr.value == 0
-    if ~(libisloaded('swmm5'))
-        loadlibrary('swmm5');
-    end
-    error = calllib('swmm5','swmm_step', timePtr);
-    time  = timePtr.value*24;
-end
-if ~(libisloaded('swmm5'))
-    loadlibrary('swmm5');
-end
-error = calllib('swmm5','swmm_end');
-if ~(libisloaded('swmm5'))
-    loadlibrary('swmm5');
-end
-error = calllib('swmm5','swmm_report');
-if ~(libisloaded('swmm5'))
-    loadlibrary('swmm5');
-end
-% error = calllib('swmm5','swmm_save_results');         % Save to folders
-error = calllib('swmm5','swmm_close');
-if libisloaded('swmm5')
-    unloadlibrary swmm5;
-end
+check_swmm(calllib('swmm5','swmm_end'),'end');
+check_swmm(calllib('swmm5','swmm_report'),'report');
+clear cleanup
 
 %% RESULTS
 % Read information results
 infor = read1D(out_file);
 
 % Surcharge
-pnode_surch = readresults(out_file,infor,swmm.Nodes,swmm.node.flooding);
+pnode_surch = readresults(out_file,infor,swmm.Nodes,swmm.node.flooding,true);
 node_surch = pnode_surch(end,1:n_node);
 
 % Water depth at manhole
@@ -203,7 +125,8 @@ out_depth = pnode_depth(end,end-n_out+1:end);
 end
 
 %% Get time series results
-function value = readresults(outFile,parameters,outtype,outid )
+function value = readresults(outFile,parameters,outtype,outid,average)
+if nargin < 5, average = false; end
 SUBCATCH   = 0;
 NODE       = 1;
 LINK       = 2;
@@ -237,9 +160,14 @@ switch outtype
 end
 if ~( Nval==-999)
     Fout = fopen(outFile, 'r');
-    value = zeros(N_period,Nval);
+    if Fout < 0, error('OFM:SWMMOutput','Cannot open %s.',outFile); end
+    cleanup = onCleanup(@() fclose(Fout));
+    if N_period < 1, error('OFM:SWMMOutput','SWMM produced no report records.'); end
+    value = zeros(1,Nval);
+    periods = N_period;
+    if average, periods = 1:N_period; end
     for j=1:Nval
-        for i=1:N_period        
+        for i=periods
             offset = StartPos + (i-1)*BytesPerPeriod + 2*RECORDSIZE;
             if ( outtype == SUBCATCH )
                 offset = offset + RECORDSIZE*((j-1)*SubcatchVars + outid);
@@ -252,10 +180,23 @@ if ~( Nval==-999)
             else
             end          
             SEEK_SET = fseek(Fout, offset, 'bof');
-            value(i,j) = fread(Fout,1,'real*4');
+            value(1,j) = value(1,j)+fread(Fout,1,'real*4')/numel(periods);
         end
     end
-    fclose(Fout);
+    clear cleanup
 end
 end
 
+
+function check_swmm(code,operation)
+if code ~= 0
+    error('OFM:SWMM','SWMM %s failed with error code %d.',operation,code);
+end
+end
+
+function close_swmm
+if libisloaded('swmm5')
+    calllib('swmm5','swmm_close');
+    unloadlibrary('swmm5');
+end
+end
