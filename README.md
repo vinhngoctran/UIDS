@@ -16,12 +16,21 @@ fresh clone needs a local build. After a successful build, reuse it for
 subsequent simulations on that computer. Compilation is not required before
 every run. Configurations with `MODDRA=0` can run without this build.
 
+For threaded adaptive OFM routing, also compile `ofm_route` once using
+`build_ofm` and a supported **C++** compiler. This works without Parallel
+Computing Toolbox or a separate OpenMP installation. Cell hydrology can
+additionally use MATLAB workers when Parallel Computing Toolbox is available.
+
+On Apple silicon, `build_gpu` builds an optional Metal GPU routing backend.
+Select it with `Device='gpu'`. It does not require CUDA or Parallel Computing
+Toolbox. See the [GPU setup, precision and checks](docs/GPU.md) before use.
+
 The interface is a MATLAB MEX file compiled for the local operating system
 and CPU architecture. A Windows binary cannot be reused on Linux or macOS.
 On a Mac, build using the MATLAB installation and architecture that will run
 the model. See [MathWorks MEX platform compatibility](https://www.mathworks.com/help/matlab/matlab_external/platform-compatibility.html).
 
-#### 1. Copy the complete repository and install a C compiler
+#### 1. Copy the complete repository and install a C/C++ compiler
 
 Keep `src/`, `native/`, `third_party/swmm/`, `tests/` and the model inputs
 together. The repository includes the SWMM C source. No separate SWMM
@@ -53,6 +62,11 @@ the MATLAB Command Window, not the operating system terminal:
 addpath(fullfile(pwd, 'src'));
 mex -setup C
 build_swmm;
+% Threaded adaptive OFM solver:
+mex -setup C++
+build_ofm;
+% Optional GPU routing on Apple silicon:
+% build_gpu;
 ```
 
 Select a supported **C** compiler if MATLAB offers more than one. MATLAB
@@ -77,6 +91,9 @@ addpath(fullfile(pwd, 'tests'));
 run_regression_tests;
 run_hydrology_tests;
 run_swmm_tests;
+run_routing_parallel_tests;
+% Requires Parallel Computing Toolbox:
+run_parallel_tests;
 ```
 
 `which swmm_live` should point to this checkout's `src/` folder. The tests
@@ -111,6 +128,7 @@ it. Its default Test 01 configuration has sewer coupling disabled.
 | --- | --- |
 | New computer, fresh clone, different operating system or CPU architecture | Run the setup and build steps on the destination computer. |
 | Changes to `native/swmm_live.c` or the SWMM engine source | Rebuild before running the changed code. |
+| Changes to `native/ofm_route.cpp` | Run `clear ofm_route; build_ofm` with the local C++ compiler. |
 | MATLAB or compiler upgrade | Rebuild for the new environment before using the coupled model. |
 | Repeated simulations with the same source and environment | Reuse the existing compiled module. |
 | MATLAB cannot find a supported compiler | Install a compiler from the matching MathWorks list, restart MATLAB, then run `mex -setup C` and `build_swmm`. |
@@ -182,6 +200,98 @@ should use `explicit`. The original roof-to-ground outlet behavior is
 preserved in both routing schemes. Unused predecessors, unfinished
 experiments and generated run files are listed with their removal reasons
 in the review. The review also lists validation gaps in optional modules.
+
+### Parallel execution
+
+From the repository root, after running `build_ofm` once:
+
+```matlab
+addpath('src');
+options = struct('Parallel','auto','NumWorkers',4);
+Results = ofm_urban('your_model.inf',options);
+disp(Results.Execution);
+```
+
+The adaptive solver (`TSTP2D=2`) has a compiled C++ implementation that
+partitions shared-face calculations and cell updates between CPU threads.
+Each face is calculated once. The cells gather those transfers after all
+faces are finished, preserving the MATLAB solver's transfer order, roof
+outlets, storage limits and boundary conditions. The native threads do not
+call MATLAB APIs. Their count is capped by available hardware threads.
+
+ET, canopy/snow, infiltration/runoff and soil calculations use `parfor`
+blocks of independent active cells. Serial and worker execution call the
+same `hydrology_cells` kernel. Static parameters stay in a
+`parallel.pool.Constant` on workers; only current block state and forcing
+are exchanged at each step. The default pool has up to four process workers.
+Existing pools are reused and left open. These choices follow the MathWorks
+guidance on [worker environments](https://www.mathworks.com/help/parallel-computing/choose-between-thread-based-and-process-based-environments.html)
+and [reusing worker data](https://www.mathworks.com/help/parallel-computing/improve-parfor-performance.html).
+
+| Option | Default and behavior |
+| --- | --- |
+| `Parallel` | `'auto'`: use native routing from 4096 active cells when built, and worker hydrology from `ParallelMinCells` when the toolbox is available. `true` or `'on'` bypasses size thresholds. `false` or `'off'` selects serial execution. |
+| `NumWorkers` | Four when creating a pool or running native routing. An existing pool is reused; an explicit value limits how many of its workers participate. |
+| `ParallelMinCells` | 8192 active cells for automatic worker hydrology. Smaller/light runs often spend more time scheduling workers than calculating. |
+| `Routing` | `'auto'`, `'matlab'`, `'native'`, or `'gpu'`. Explicit native/GPU selection requires its local build and `TSTP2D=2`. `Parallel=false, Routing='native'` runs the native CPU solver with one thread. |
+| `Device` | `'cpu'` by default. `'gpu'` selects the Apple Metal backend while optional hydrology continues on the CPU. |
+| `PoolType` | `'Processes'` when starting a pool; `'Threads'` is also supported by the tested hydrology path. Existing pool type is retained. |
+
+Automatic mode falls back to MATLAB routing when the compiled module is
+missing, and to serial hydrology if the toolbox or pool is unavailable.
+Explicit parallel hydrology requests report an error if they cannot run.
+Check `Results.Execution.RoutingBackend`, `RoutingWorkers`,
+`ParallelHydrology`, `PoolType` and `Workers` to see what actually ran.
+
+The sequential scheme (`TSTP2D=1`), channel routing and SWMM exchange retain
+their ordered updates. The SWMM engine itself remains on its existing build
+and thread settings. Pool workers never call the SWMM MEX. Timesteps run in
+order, and each step is still saved before the next one, without accumulating
+an output queue or time history in RAM. Process workers add memory overhead;
+reduce `NumWorkers` if RAM is limited. Gauge assignments are cached at
+startup, and rainfall, boundary and output bookkeeping use grid operations.
+
+For a strict serial comparison:
+
+```matlab
+serial = ofm_urban('your_model.inf',struct('Parallel',false,'Routing','matlab'));
+```
+
+`run_routing_parallel_tests` checks MATLAB/native equations, roof drainage,
+wet/dry behavior, boundaries, conservation, one-cell-wide grids and thread
+shutdown/recovery. `run_parallel_tests` compares every numeric result field
+and surface-change grid in every saved step between serial and parallel runs.
+Use `run_parallel_tests(128)` for a larger timing fixture. Pool startup, disk
+speed, grid size and enabled models affect whole-run speed; routing-only
+timings are not whole-model speedup claims.
+Measured routing and whole-model fixture timings are recorded in the
+[performance notes](docs/PERFORMANCE.md), together with reproduction commands.
+
+### GPU execution on Apple silicon
+
+Build once and select the GPU from MATLAB at the repository root:
+
+```matlab
+addpath('src');
+mex -setup C++
+build_gpu;
+options = struct('Device','gpu','Parallel','auto','NumWorkers',4);
+Results = ofm_urban('your_model.inf',options);
+disp(Results.Execution);
+```
+
+This sends adaptive OFM routing (`TSTP2D=2`) to the Mac's Metal GPU. CPU
+hydrology workers, channels, direct SWMM exchange and step-file saving keep
+their existing roles. Set `Device='cpu'` to use CPU routing again. An explicit
+GPU request reports an error if its platform/build is unavailable.
+
+GPU storage and transfers use compensated FP32 pairs, while hydraulic powers
+use FP32. They are not full FP64 arithmetic. Every GPU routing call checks
+the water budget on the CPU, and tests compare GPU results with the CPU
+solver. The [GPU guide](docs/GPU.md) records the precision rules, checks and
+measured routing-only timings. On the tested M3 Ultra, the 1024 x 1024 routing
+fixture was about 9.6 times faster than four CPU threads; whole-model gains
+depend on hydrology, synchronization and disk costs.
 
 ### ET, canopy/snow and layered soil water
 

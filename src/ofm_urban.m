@@ -514,68 +514,109 @@ amincdepth = 0.;
 amaxcdepth = 0.;
 Qpeak = zeros(1,n_chout);                                              % Maximum discharge at outlet
 
+H=struct();
+rain_int=zeros(n_row,n_col);
 % For OFM
 oflow = max(0,inil);
 oflow(~active | shp == 1 | (shp == 2 & modchn == 1)) = 0;
 %                             % Overland flow
 of_rate(1:n_row,1:n_col) = 0;                           % Overland flow rate
 chn_rate(1:n_row,1:n_col) = 0;                          % Channel flow rate
-v_infil(1:n_row,1:n_col) = 0;                           % Infiltration depth = water table
+H.v_infil(1:n_row,1:n_col) = 0;                           % Infiltration depth = water table
 tot_rain_depth(1:n_row,1:n_col) = 0;                    % Total rainfall depth
 uvfluxs(1:n_row,1:n_col,1:2) = 0;                       % Flow rate in (u,v) directions
 inun_max(1:n_row,1:n_col) = 0;                          % Initial maximum flow rate
 
 % For RUNOFF
-baseflow(1:n_row,1:n_col) = 0;                          % Baseflow
-slow_interflow(1:n_row,1:n_col) = 0;                    % Slow interflow 
-fast_interflow(1:n_row,1:n_col) = 0;                    % Fast interflow
-sat_storage(1:n_row,1:n_col) = 0;                       % Groundwater storage
-unsat_storage(1:n_row,1:n_col) = 0;                     % Upper soil storage
-perc(1:n_row,1:n_col) = 0;                              % Percolation
+H.baseflow(1:n_row,1:n_col) = 0;                          % Baseflow
+H.slow_interflow(1:n_row,1:n_col) = 0;                    % Slow interflow
+H.fast_interflow(1:n_row,1:n_col) = 0;                    % Fast interflow
+H.sat_storage(1:n_row,1:n_col) = 0;                       % Groundwater storage
+H.unsat_storage(1:n_row,1:n_col) = 0;                     % Upper soil storage
+H.perc(1:n_row,1:n_col) = 0;                              % Percolation
 
 % For CANOPY
-canopystore(1:n_row,1:n_col) = 0;                       % Canopy storage
-snowpackstore(1:n_row,1:n_col) = 0;                     % Snowpack storage
-throughfall(1:n_row,1:n_col) = 0;                       % Throughfall
-snowmetl(1:n_row,1:n_col) = 0;                          % Snowmetl
+H.canopystore(1:n_row,1:n_col) = 0;                       % Canopy storage
+H.snowpackstore(1:n_row,1:n_col) = 0;                     % Snowpack storage
+H.throughfall(1:n_row,1:n_col) = 0;                       % Throughfall
+H.snowmetl(1:n_row,1:n_col) = 0;                          % Snowmetl
 
 % For Infiltration
-bf(1:n_row,1:n_col) = 0;                                % Cumulative precipitation for infiltration (cm)
-inf_rate(1:n_row,1:n_col) = 0;                          % Infiltration rate (cm/h)
-stor(1:n_row,1:n_col) = 0;                              % Soil moisture [cm]
-ro(1:n_row,1:n_col) = 0;                                % Runoff (cm)
-ipond(1:n_row,1:n_col) = 0;                             % Ponded conditions
-fp(1:n_row,1:n_col) = 0;                                % Infiltration rate at ponding (cm/h)
-tp(1:n_row,1:n_col) = 0;                                % Time to ponding (h)
-tpp(1:n_row,1:n_col) = 0;                               % tpp = time required to infiltrate Fp if the system had started in ponded conditions (h)
+H.bf(1:n_row,1:n_col) = 0;                                % Cumulative precipitation for infiltration (cm)
+H.inf_rate(1:n_row,1:n_col) = 0;                          % Infiltration rate (cm/h)
+H.stor(1:n_row,1:n_col) = 0;                              % Soil moisture [cm]
+H.ro(1:n_row,1:n_col) = 0;                                % Runoff (cm)
+H.ipond(1:n_row,1:n_col) = 0;                             % Ponded conditions
+H.fp(1:n_row,1:n_col) = 0;                                % Infiltration rate at ponding (cm/h)
+H.tp(1:n_row,1:n_col) = 0;                                % Time to ponding (h)
+H.tpp(1:n_row,1:n_col) = 0;                               % tpp = time required to infiltrate Fp if the system had started in ponded conditions (h)
 
 % For Evapotranspiration
-act_evap(1:n_row,1:n_col) = 0;                          % Actual Evaporation [m/s]
-evap(1:n_row,1:n_col) = 0;                              % Evapotranspiration [m/s]
-tot_act_evap(1:n_row,1:n_col) = 0;                      % Total evapotranspiration [m]
+H.act_evap(1:n_row,1:n_col) = 0;                          % Actual Evaporation [m/s]
+H.evap(1:n_row,1:n_col) = 0;                              % Evapotranspiration [m/s]
+H.tot_act_evap(1:n_row,1:n_col) = 0;                      % Total evapotranspiration [m]
 
 % For Soil water fluxes model
-psim(1:n_row,1:n_col) = -500;                            % matric soil water potential, kPa
-gwat(1:n_row,1:n_col) = 0;                              % groundwater storage below soil layers, mm
-vrfli(1:n_row,1:n_col) = 0;                             % vertical drainage rate from layer i, mm/day
-infli(1:n_row,1:n_col) = 0;                             % infiltration rate into layer, mm/day
-byfli(1:n_row,1:n_col) = 0;                             % bypass flow rate from layer, mm/day
-dsfli(1:n_row,1:n_col) = 0;                             % downslope flow rate from layer, mm/day
-ntfli(1:n_row,1:n_col) = 0;                             % net flow rate into layer, mm/day
-trani(1:n_row,1:n_col) = 0;                             % transpiration rate from layer, mm/day
-swat(1:n_row,1:n_col) = 0;                              % total soil water in all layers, mm
-gwfl(1:n_row,1:n_col) = 0;                              % streamflow from groundwater discharge, mm/d
-seep(1:n_row,1:n_col) = 0;                              % deep seepage loss from groundwater, mm/d
+H.psim(1:n_row,1:n_col) = -500;                            % matric soil water potential, kPa
+H.gwat(1:n_row,1:n_col) = 0;                              % groundwater storage below soil layers, mm
+H.vrfli(1:n_row,1:n_col) = 0;                             % vertical drainage rate from layer i, mm/day
+H.infli(1:n_row,1:n_col) = 0;                             % infiltration rate into layer, mm/day
+H.byfli(1:n_row,1:n_col) = 0;                             % bypass flow rate from layer, mm/day
+H.dsfli(1:n_row,1:n_col) = 0;                             % downslope flow rate from layer, mm/day
+H.ntfli(1:n_row,1:n_col) = 0;                             % net flow rate into layer, mm/day
+H.trani(1:n_row,1:n_col) = 0;                             % transpiration rate from layer, mm/day
+H.swat(1:n_row,1:n_col) = 0;                              % total soil water in all layers, mm
+H.gwfl(1:n_row,1:n_col) = 0;                              % streamflow from groundwater discharge, mm/d
+H.seep(1:n_row,1:n_col) = 0;                              % deep seepage loss from groundwater, mm/d
+
+H.et_soil=zeros(n_row,n_col); H.et_canopy=H.et_soil;
 
 % Optional soil states use a layer dimension, never a time dimension.
-soil_evap=zeros(n_row,n_col); transpiration=soil_evap; potential_et=soil_evap;
-soil_balance=soil_evap; seep_total=soil_evap; soil_et_total=soil_evap;
+H.soil_evap=zeros(n_row,n_col); H.transpiration=H.soil_evap; H.potential_et=H.soil_evap;
+H.soil_balance=H.soil_evap; H.seep_total=H.soil_evap; H.soil_et_total=H.soil_evap;
 if modswf==1
     layers=modsfl_inf.nlayer;
-    psim=repmat(reshape(modsfl_inf.psim_init,1,1,layers),n_row,n_col,1);
-    gwat(:)=modsfl_inf.gwat_init;
-    vrfli=zeros(n_row,n_col,layers); infli=vrfli; byfli=vrfli; dsfli=vrfli; ntfli=vrfli; trani=vrfli;
+    H.psim=repmat(reshape(modsfl_inf.psim_init,1,1,layers),n_row,n_col,1);
+    H.gwat(:)=modsfl_inf.gwat_init;
+    H.vrfli=zeros(n_row,n_col,layers); H.infli=H.vrfli; H.byfli=H.vrfli; H.dsfli=H.vrfli; H.ntfli=H.vrfli; H.trani=H.vrfli;
 end
+
+% Rain-gauge assignment does not change during a run.
+rainGauge=ones(n_row,n_col);
+if id_rain~=0 && n_gauge>1
+    [rows,cols]=find(active); nearest=inf(numel(rows),1); ids=ones(numel(rows),1);
+    xc=x_cor+(cols-.5)*s_grid; yc=y_cor+(n_row-rows+.5)*s_grid;
+    for j=1:n_gauge
+        distance=sqrt((xc-x_rain(j)).^2+(yc-y_rain(j)).^2);
+        take=distance<nearest; nearest(take)=distance(take); ids(take)=j;
+    end
+    rainGauge(active)=ids;
+end
+cfg=struct('Canopy',modint==1,'Energy',modets==1,'Infiltration',modinf==1, ...
+    'Soil',modswf==1,'DeltaT',deltaT,'StartDate',Start_Date,'Rows',n_row, ...
+    'XCorner',x_cor,'YCorner',y_cor,'CellSize',s_grid,'Zone',areazone);
+cfg.RoutingScheme=TSP2D;
+cfg.Maps=struct('imp',imp);
+if modint==1 || modets==1
+    cfg.Maps.lai=lai; cfg.Maps.vegheight=vegheight; cfg.Maps.albs=albs;
+end
+if modets==1
+    cfg.Maps.tcan=tcan; cfg.Maps.albv=albv; cfg.Maps.emis=emis; cfg.Maps.emiv=emiv;
+end
+if modinf==1
+    cfg.Maps.soil=soil; cfg.Maps.runof_reg=runof_reg;
+    cfg.InfiltrationParameters=pa_infil; cfg.RunoffParameters=pa_runoff;
+end
+if modswf==1, cfg.SoilParameters=modsfl_inf; end
+cfg.Constants=struct('Daylight',G_daylightSavings,'Zair',G_Zair,'Zu',G_Zu, ...
+    'Stefan',G_stefBoltz,'Rv',G_Rv,'cP',G_cP,'mW',G_mW,'mA',G_mA, ...
+    'WaterDensity',G_rhow,'esA',G_esA,'esB',G_esB,'esC',G_esC,'Kappa',G_kappa, ...
+    'Latent',G_lambdalh,'AirDensity',G_rhoa,'Cp',G_Cp,'Freezing',G_pfreez, ...
+    'Gamma',G_Gam_ma,'Ds',G_Ds,'CanopyDecay',G_candec,'Melt',G_F,'WindHeight',G_zwd,'Rc',G_Rc);
+hydrology=hydrology_executor(cfg,active,options);
+hydrologyCleanup=onCleanup(@() delete(hydrology));
+routingOptions=struct('Backend',hydrology.Execution.RoutingBackend,'Workers',hydrology.Execution.RoutingWorkers);
+clear cfg
 
 % For Drainage
 node_depth_at_t = zeros(1,n_node);                          % Initial water depth of manhole
@@ -654,151 +695,59 @@ for t = 1:NT_RunOF
     % Apply the rainfall to each grid cell within the watershed in order to
     % calcuate average areal rainfall at each step of rain storm
     
-    % Update the boundary based on boundary condition
-    for x = 1:n_row
-        for y = 1:n_col
-            if shp(x,y) ~= -9999
-                if shp(x,y) == 5                                        % Free boundary
-                    oflow(x,y) = 0;
-                elseif shp(x,y) == 4                                    % Soft boundary with water elevation
-                    oflow(x,y) = max(0,boundary_at_t(bshape(x,y))-dem(x,y));
-                end
-            end
-        end
+    % Apply the prescribed step-end boundary stage.
+    oflow(shp==5)=0;
+    if n_boun>0
+        stageCells=shp==4;
+        oflow(stageCells)=max(0,boundary_at_t(bshape(stageCells))-dem(stageCells));
     end
     % ===========================================================================================================================================
     % COMPUTE RAINFAL-RUNOFF MODEL
     % ===========================================================================================================================================  
     
-    for x = 1:n_row
-        for y = 1:n_col
-            if shp(x,y) ~= -9999
-                
-                % Set the value of flow rate to cell x, y to zero
-                of_rate(x,y) = 0;
-                
-                
-                % Compute rainfall depth at cell x, y
-                rain_int(x,y) = rainfest(deltaT,s_grid,n_row,x,y,x_cor,y_cor,id_rain,n_gauge,x_rain,y_rain,RAIN_at_t);
-                % Determine the total rainfall Depth
-                tot_rain_depth(x,y) = tot_rain_depth(x,y) + rain_int(x,y)*deltaT;
-                   
-                % =========================================================
-                % EVAPOTRANSPIRATION MODEL: Compute actual evaporation rate
-                % =========================================================
-                if modets == 1
-                    % Use Energy balance model
-                    [potential_et(x,y),evap_EB] = evapotrans(Start_Date,deltaT,t, x_cor,y_cor,n_row,x,y,s_grid,areazone,...
-                                                forcingets_at_t,lai(x,y), vegheight(x,y), tcan(x,y),...
-                                                albs(x,y), albv(x,y), emis(x,y), emiv(x,y),rain_int(x,y),oflow(x,y),stor(x,y),...
-                                                G_daylightSavings, G_Zair, G_Zu, G_stefBoltz, G_Rv, G_cP, G_mW, G_mA, G_rhow, G_esA, G_esB, G_esC, G_kappa);
-                    if modint == 0
-                        evap(x,y) = evap_EB;
-                    end
-                end
-                
-                % =========================================================
-                % CANOPY INTERCEPTION, SNOWMETL MODEL, and EVAPOTRANSPIRATION
-                % =========================================================
-                canopyPotential=[];
-                if modets==1, canopyPotential=potential_et(x,y); end
-                if modint == 1
-                     % Use Rutter–Gash canopy formulation
-                     [canopystore(x,y), snowpackstore(x,y), throughfall(x,y), snowmetl(x,y),et_soil(x,y),et_canopy(x,y),act_lum,evap(x,y),groundPotential]=intercsnow(deltaT,rain_int(x,y),...
-                                                forcingint_at_t,albs(x,y),lai(x,y),vegheight(x,y),canopystore(x,y),snowpackstore(x,y),oflow(x,y),stor(x,y),...
-                                                G_stefBoltz, G_kappa, G_lambdalh, G_rhoa, G_Cp, G_Rv, G_pfreez, G_Gam_ma, G_Ds, G_candec, G_F, G_zwd, G_Rc,canopyPotential);
-                    % 
-                    act_evap(x,y)=act_lum;
-                    potential_et(x,y)=groundPotential+et_canopy(x,y);
-                else
-                    groundPotential=potential_et(x,y);
-                    act_evap(x,y)=evap(x,y);
-                end
-                % Unmet ground demand can withdraw soil water only via SVAT.
-                if modint==1, surfaceEvap=et_soil(x,y); else, surfaceEvap=evap(x,y); end
-                unmetET=max(0,groundPotential-surfaceEvap)*(1-imp(x,y));
-                
-                % Compute temporary water depth from the effective rainfall and evapotranspiration
-                if modint == 1
-                    of_rate(x,y) = throughfall(x,y) + snowmetl(x,y) - et_soil(x,y);
-                else
-                    of_rate(x,y) = rain_int(x,y) - evap(x,y);
-                end
-                of_rate(x,y) = max(of_rate(x,y),-oflow(x,y)/deltaT);
-                
-                % COMPUTE INFLOW - OUTFLOW FROM POINT SOURCES -------------
-                if shp(x,y) == 6                                                                % Soft boundary with water inflow [m3/s]
-                    of_rate(x,y) = of_rate(x,y) + boundary_at_t(bshape(x,y)) / s_grid^2;
-                end
-                
-                % =========================================================
-                % INFILTRATION MODEL
-                % =========================================================
-                if modinf == 1
-                    [bf(x,y),inf_rate(x,y),stor(x,y),ro(x,y),...
-                        ipond(x,y),fp(x,y),tp(x,y),tpp(x,y),v_infil(x,y), of_rate(x,y)]=...
-                        infiltration(bf(x,y),inf_rate(x,y),stor(x,y),ro(x,y),ipond(x,y),fp(x,y),tp(x,y),tpp(x,y),...
-                        x,y,deltaT,soil,v_infil(x,y),pa_infil,oflow(x,y),of_rate(x,y),imp);
-                    
-                    if modswf == 0                              
-                        % =========================================================
-                        % RUNOFF MODEL: This MODEL runs if the SOIL WATER
-                        % FLUXES MODEL is NOT selected.
-                        % =========================================================
-                        [of_rate(x,y),baseflow(x,y),slow_interflow(x,y),fast_interflow(x,y),sat_storage(x,y),unsat_storage(x,y),perc(x,y)] = runoffsimp...
-                            (pa_runoff,runof_reg(x,y),inf_rate(x,y),sat_storage(x,y), unsat_storage(x,y),of_rate(x,y),deltaT);
-                    end
-                end
-                
-                % =========================================================
-                % SOIL WATER FLUXES MODEL
-                % =========================================================
-                if modswf == 1
-                    profile=reshape(psim(x,y,:),1,[]);
-                    cover=1-exp(-0.5*max(0,lai(x,y)));
-                    [profile,gwat(x,y),vFlux,iFlux,bFlux,dFlux,nFlux,tFlux,swat(x,y), ...
-                        gwfl(x,y),seep(x,y),soilDiag]=soilground(modsfl_inf,profile, ...
-                        cover*unmetET,gwat(x,y),(1-cover)*unmetET,inf_rate(x,y),deltaT);
-                    psim(x,y,:)=reshape(profile,1,1,[]);
-                    vrfli(x,y,:)=reshape(vFlux,1,1,[]); infli(x,y,:)=reshape(iFlux,1,1,[]);
-                    byfli(x,y,:)=reshape(bFlux,1,1,[]); dsfli(x,y,:)=reshape(dFlux,1,1,[]);
-                    ntfli(x,y,:)=reshape(nFlux,1,1,[]); trani(x,y,:)=reshape(tFlux,1,1,[]);
-                    soil_evap(x,y)=soilDiag.SoilEvaporation/1000/86400;
-                    transpiration(x,y)=soilDiag.Transpiration/1000/86400;
-                    soil_balance(x,y)=soilDiag.BalanceResidual;
-                    act_evap(x,y)=act_evap(x,y)+soil_evap(x,y)+transpiration(x,y);
-                    of_rate(x,y)=of_rate(x,y)+(gwfl(x,y)+sum(bFlux+dFlux))/1000/86400;
-                    seep_total(x,y)=seep_total(x,y)+seep(x,y)/1000/86400*deltaT;
-                    soil_et_total(x,y)=soil_et_total(x,y)+(soil_evap(x,y)+transpiration(x,y))*deltaT;
-                end
-                tot_act_evap(x,y)=tot_act_evap(x,y)+act_evap(x,y)*deltaT;
-
-                % Keeping track of the Total Volume of rainfall and total volume of infitration
-                if t == NT_RunOF
-                    vin = vin + tot_rain_depth(x,y)*s_grid^2;
-                    vinftot = vinftot + v_infil(x,y)*s_grid^2;
-                end
-                
-                % Compute flow to the manhole
-                if moddrain == 1
-                    if node_ad(x,y) ~= -9999
-                        [q_to_manhole(1,node_ad(x,y)), of_rate(x,y)] = qmanhole(deltaT,s_grid,s_dep(x,y),oflow(x,y),of_rate(x,y),node_depth_at_t(node_ad(x,y)),dem(x,y),node_invert(x,y));
-                    end
-                end
-                
-                % Compute flow to the manhole
-                if out_free == 1 && ofree_ad(x,y) ~= -9999
-                    q_to_freeoutlet(1,ofree_ad(x,y)) = qnode(deltaT,of_rate(x,y),s_grid,s_dep(x,y),oflow(x,y));
-                    of_rate(x,y) = of_rate(x,y) - q_to_freeoutlet(1,ofree_ad(x,y)) / s_grid^2;
-                end
-            end
+    % Independent cell processes are completed before shared routing/exchange.
+    rain_int(:)=0;
+    if id_rain==0
+        rain_int(active)=RAIN_at_t(active)/1000/deltaT;
+    else
+        rain_int(active)=RAIN_at_t(rainGauge(active))/1000/deltaT;
+    end
+    tot_rain_depth(active)=tot_rain_depth(active)+rain_int(active)*deltaT;
+    of_rate(:)=0;
+    of_rate(active)=rain_int(active);
+    if n_boun>0
+        inflowCells=shp==6;
+        of_rate(inflowCells)=of_rate(inflowCells)+boundary_at_t(bshape(inflowCells))/s_grid^2;
+    end
+    stepForcing=struct('Step',t,'Canopy',[],'Energy',[]);
+    if modint==1, stepForcing.Canopy=forcingint_at_t; end
+    if modets==1, stepForcing.Energy=forcingets_at_t; end
+    [H,of_rate]=hydrology.step(H,oflow,rain_int,of_rate,stepForcing);
+    if t==NT_RunOF
+        vin=sum(tot_rain_depth(active))*s_grid^2;
+        vinftot=sum(H.v_infil(active))*s_grid^2;
+    end
+    % Sewer/native state belongs to the client, never to pool workers.
+    if moddrain==1
+        for j=1:n_node
+            cellID=nodeCells(j);
+            [q_to_manhole(j),of_rate(cellID)]=qmanhole(deltaT,s_grid,s_dep(cellID), ...
+                oflow(cellID),of_rate(cellID),node_depth_at_t(j),dem(cellID),node_invert(cellID));
         end
-    end    
-    
+    end
+    if out_free==1
+        for cellID=find(active & ofree_ad~=-9999).'
+            inlet=ofree_ad(cellID);
+            q_to_freeoutlet(inlet)=qnode(deltaT,of_rate(cellID),s_grid,s_dep(cellID),oflow(cellID));
+            of_rate(cellID)=of_rate(cellID)-q_to_freeoutlet(inlet)/s_grid^2;
+        end
+    end
+
    %% ===========================================================================================================================================
     % COMPUTE OVERLAND FLOW MODEL
     % ===========================================================================================================================================
     fixedDepth = oflow;
+    routingDiagnostics=struct('Backend','sequential');
     if TSP2D == 1
         %% ======================================================================================================================================
         % Legacy sequential routing
@@ -830,7 +779,7 @@ for t = 1:NT_RunOF
             display(['             Overland Flow Model is running with Explicit scheme. . .']);
         end
         
-        [of_rate,uvfluxs] = explicit(TSP2D,shp,n_row,n_col,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,fixedDepth);
+        [of_rate,uvfluxs,routingDiagnostics] = explicit(TSP2D,shp,n_row,n_col,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,fixedDepth,routingOptions);
         
     end
     
@@ -1017,75 +966,52 @@ for t = 1:NT_RunOF
             T_warning = T_warning + NT_WAR;
         end
     end
-    for x = 1:n_row
-        for y = 1:n_col
-            if shp(x,y) == -9999
-                inun_max(x,y) = -9999;
-            elseif shp(x,y) == 2 && modchn == 1
-                if inil(x,y) > inun_max(x,y)
-                    inun_max(x,y) = inil(x,y);
-                end
-            else
-                if oflow(x,y) > inun_max(x,y)
-                    inun_max(x,y) = oflow(x,y);
-                end
-            end
-        end
-    end
-    
-    
+    currentDepth=oflow;
+    currentDepth(shp==2 & modchn==1)=inil(shp==2 & modchn==1);
+    inun_max(active)=max(inun_max(active),currentDepth(active));
+    inun_max(~active)=-9999;
+
     % Write this step only. No gridded output history is retained.
     t_save = t_save+1;
     Waterdepth = oflow;
     WaterVec = of_rate;
-    for x = 1:n_row
-        for y = 1:n_col
-            if shp(x,y) == -9999
-                Results.Exp_rain(x,y) = -9999;
-                Results.Exp_vol(x,y) = -9999;
-                Results.Exp_flo(x,y) = -9999;
-            elseif shp(x,y) == 2 && modchn == 1
-                Results.Exp_rain(x,y) = rain_int(x,y);
-                Results.Exp_vol(x,y) = v_infil(x,y);
-                Results.Exp_flo(x,y) = inil(x,y);
-            else
-                Results.Exp_rain(x,y) = rain_int(x,y);
-                Results.Exp_vol(x,y) = v_infil(x,y);
-                Results.Exp_flo(x,y) = oflow(x,y);
-            end
-        end
-    end
+    Results.Exp_rain=rain_int; Results.Exp_vol=H.v_infil; Results.Exp_flo=oflow;
+    channelOut=shp==2 & modchn==1;
+    Results.Exp_flo(channelOut)=inil(channelOut);
+    Results.Exp_rain(~active)=-9999; Results.Exp_vol(~active)=-9999; Results.Exp_flo(~active)=-9999;
+    Results.Execution=hydrology.Execution;
+    Results.RoutingDiagnostics=routingDiagnostics;
     Results.Step = t;
     Results.TimeSeconds = t*deltaT;
-    Results.total_evap=tot_act_evap;
-    Results.potential_et=potential_et;
+    Results.total_evap=H.tot_act_evap;
+    Results.potential_et=H.potential_et;
     Results.DateTime = Start_Date+seconds(t*deltaT);
     Results.OutputDirectory = Temp_folder;
     Results.StepsWritten = t_save;
     Res_name = fullfile(Temp_folder,sprintf('step_%09d.mat',t));
     if modint == 1
-        Results.canopystore = canopystore;
-        Results.snowpackstore = snowpackstore;
-        Results.throughfall = throughfall;
-        Results.snowmetl = snowmetl;
-        Results.act_evap(1:n_row,1:n_col) = act_evap;                   % Evapotranspiration
-        Results.et_canopy(1:n_row,1:n_col) = et_canopy;                 % Canopy Evapotranspiration
-        Results.et_soil(1:n_row,1:n_col) = et_soil;                     % Soil Evapotranspiration
+        Results.canopystore = H.canopystore;
+        Results.snowpackstore = H.snowpackstore;
+        Results.throughfall = H.throughfall;
+        Results.snowmetl = H.snowmetl;
+        Results.act_evap(1:n_row,1:n_col) = H.act_evap;                   % Evapotranspiration
+        Results.et_canopy(1:n_row,1:n_col) = H.et_canopy;                 % Canopy Evapotranspiration
+        Results.et_soil(1:n_row,1:n_col) = H.et_soil;                     % Soil Evapotranspiration
     end
     if modets == 1
-        Results.act_evap(1:n_row,1:n_col) = act_evap;                   % Evapotranspiration
+        Results.act_evap(1:n_row,1:n_col) = H.act_evap;                   % Evapotranspiration
     end
     if modinf == 1
-        Results.ro = ro;                                                % Runoff potential
-        Results.stor = stor;                                            % Soil moisture
-        Results.inf_rate = inf_rate;                                    % Infiltration rate
-        Results.v_infil = v_infil;                                      % Water table depth
-        Results.baseflow = baseflow;                                    % Baseflow
-        Results.slow_interflow = slow_interflow;                        % Slow interflow
-        Results.fast_interflow = fast_interflow;                        % Fast interflow
-        Results.sat_storage = sat_storage;                              % Groundwater storage
-        Results.unsat_storage = unsat_storage;                          % Upper soil storage
-        Results.perc = perc;                                            % Percolation
+        Results.ro = H.ro;                                                % Runoff potential
+        Results.stor = H.stor;                                            % Soil moisture
+        Results.inf_rate = H.inf_rate;                                    % Infiltration rate
+        Results.v_infil = H.v_infil;                                      % Water table depth
+        Results.baseflow = H.baseflow;                                    % Baseflow
+        Results.slow_interflow = H.slow_interflow;                        % Slow interflow
+        Results.fast_interflow = H.fast_interflow;                        % Fast interflow
+        Results.sat_storage = H.sat_storage;                              % Groundwater storage
+        Results.unsat_storage = H.unsat_storage;                          % Upper soil storage
+        Results.perc = H.perc;                                            % Percolation
     end
     if moddrain == 1
         Results.q_to_manhole = q_to_manhole;
@@ -1103,22 +1029,22 @@ for t = 1:NT_RunOF
         Results.SewerVolume = sewerState.SewerVolume;
     end
     if modswf == 1
-        Results.soil_evap=soil_evap;
-        Results.transpiration=transpiration;
-        Results.soil_balance=soil_balance;
-        Results.seep_total=seep_total;
-        Results.soil_et_total=soil_et_total;
-        Results.psim = psim;                                            % matric soil water potential, kPa
-        Results.gwat = gwat;                                            % groundwater storage below soil layers, mm
-        Results.vrfli = vrfli;                                          % vertical drainage rate from layer i, mm/day
-        Results.infli = infli;                                          % infiltration rate into layer, mm/day
-        Results.byfli = byfli;                                          % bypass flow rate from layer, mm/day
-        Results.dsfli = dsfli;                                          % downslope flow rate from layer, mm/day
-        Results.ntfli = ntfli;                                          % net flow rate into layer, mm/day
-        Results.trani = trani;                                          % transpiration rate from layer, mm/day
-        Results.swat = swat;                                            % total soil water in all layers, mm
-        Results.gwfl = gwfl;                                            % streamflow from groundwater discharge, mm/d
-        Results.seep = seep;                                            % deep seepage loss from groundwater, mm/d
+        Results.soil_evap=H.soil_evap;
+        Results.transpiration=H.transpiration;
+        Results.soil_balance=H.soil_balance;
+        Results.seep_total=H.seep_total;
+        Results.soil_et_total=H.soil_et_total;
+        Results.psim = H.psim;                                            % matric soil water potential, kPa
+        Results.gwat = H.gwat;                                            % groundwater storage below soil layers, mm
+        Results.vrfli = H.vrfli;                                          % vertical drainage rate from layer i, mm/day
+        Results.infli = H.infli;                                          % infiltration rate into layer, mm/day
+        Results.byfli = H.byfli;                                          % bypass flow rate from layer, mm/day
+        Results.dsfli = H.dsfli;                                          % downslope flow rate from layer, mm/day
+        Results.ntfli = H.ntfli;                                          % net flow rate into layer, mm/day
+        Results.trani = H.trani;                                          % transpiration rate from layer, mm/day
+        Results.swat = H.swat;                                            % total soil water in all layers, mm
+        Results.gwfl = H.gwfl;                                            % streamflow from groundwater discharge, mm/d
+        Results.seep = H.seep;                                            % deep seepage loss from groundwater, mm/d
     end
     if modchn == 1, Results.ChannelDepth = inil; end
     Results.q_to_freeoutlet = q_to_freeoutlet;

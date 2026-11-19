@@ -97,6 +97,12 @@ No additional original model functions are removed by this review.
 | `read_ofm_series.m` | Read selected cell series from step snapshots. Times and values are tested. |
 | `prepare_swmm_input.m` | Parse topology by identifiers and prepare the startup input. Supplied topology and reordered identifier tests pass. Its local `records` helper selects section data. |
 | `build_swmm.m` | Compile the pinned engine and adapter. Build tested with MATLAB R2024b on Apple silicon. |
+| `build_ofm.m` | Compile the C++ adaptive solver for local CPU threads. Build tested with MATLAB R2024b on Apple silicon; no OpenMP runtime required. |
+| `ofm_route` / `native/ofm_route.cpp` | Optional threaded backend for the canonical adaptive solver. MATLAB/native flux and depth comparisons pass across thread counts, roof outlets, boundaries, masks and one-cell-wide grids. |
+| `hydrology_cells.m` | One cell-process implementation shared by serial and worker execution. Model combinations retain the same water accounting. |
+| `hydrology_executor.m` | Partition active cells, retain immutable worker parameters and select serial/parallel execution. Saved numerical states match serial results. |
+| `build_gpu.m` | Build the Apple silicon Metal backend with a supported local C++ compiler and Apple frameworks. |
+| `ofm_metal` / `native/ofm_metal.mm` / `native/ofm_metal_kernels.metal` | Selectable GPU adaptive routing. Compensated storage/transfer arithmetic and a CPU budget check retain conservative updates. CPU/GPU depth, roof, boundary, saved-state and direct-SWMM checks pass at documented GPU tolerances. |
 | `swmm_live` / `native/swmm_live.c` | Compiled direct interface. Actual-engine tests pass for clocks, flooding, volume balance, no synchronization-file changes and session recovery. |
 | `Contents.m` | MATLAB source index; documentation rather than a model routine. |
 
@@ -152,7 +158,14 @@ infiltration/runoff, channels, forcing and streamed output.
 `run_hydrology_tests` covers ET, canopy/snow, both soil hydraulic models,
 multiple layers and complete-driver water accounting for all supported
 ET/canopy/soil combinations. `run_swmm_tests` checks direct exchange with the
-compiled engine. All three suites pass with MATLAB R2024b on Apple silicon.
+compiled engine. These suites pass with MATLAB R2024b on Apple silicon.
+`run_routing_parallel_tests` compares the MATLAB and threaded C++ solver,
+and `run_parallel_tests` compares every saved numerical field between
+serial and parallel runs. The tests cover worker hydrology and native routing.
+`run_gpu_tests` compares CPU/Metal routing and complete runs, including
+multilayer soil and CPU-worker hydrology. The actual SWMM suite also passes
+with `Device='gpu'`. GPU precision differs from CPU FP64 and is documented
+in [GPU setup and checks](GPU.md).
 MATLAB code analysis reports no syntax errors; remaining notices include
 legacy APIs, unused compatibility arguments and retained reference helpers.
 Dependency review distinguishes runtime functions from public utilities and

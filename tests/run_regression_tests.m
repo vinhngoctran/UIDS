@@ -1,5 +1,6 @@
-function run_regression_tests
+function run_regression_tests(options)
 %RUN_REGRESSION_TESTS Numerical invariants and short model/output regressions.
+if nargin<1, options=struct(); end
 root = fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(root,'src'));
 old = pwd; cleanup = onCleanup(@() cd(old)); cd(root);
@@ -140,7 +141,7 @@ config = fullfile(fixture,'model.inf');
 for scheme = [1 2]
     text = setkey(base,'TSTP2D',num2str(scheme));
     fid = fopen(config,'w'); fprintf(fid,'%s',text); fclose(fid);
-    result = ofm_urban(config);
+    result = ofm_urban(config,options);
     outputCleanup = onCleanup(@() rmdir(fileparts(result.OutputDirectory),'s'));
     files = dir(fullfile(result.OutputDirectory,'step_*.mat'));
     assert(numel(files) == 12 && result.StepsWritten == 12);
@@ -157,6 +158,21 @@ for scheme = [1 2]
     assert(max(abs(summary.inun_max(:)-0.003)) < 1e-12);
     clear outputCleanup
 end
+% Cached nearest-gauge assignment keeps first-gauge ties and native totals.
+write_matrix(fullfile(fixture,'RAINFALL.txt'),[1 2;3 4;5 6]);
+text=setkey(base,'N_GAUGE','2'); text=setkey(text,'GAU-01','1 3');
+text=regexprep(text,'(?m)^(GAU-01[^\r\n]*)(\r?\n)','$1$2GAU-02 5 3$2');
+result=run_case(text,fixture,options);
+assert(max(abs(result.Exp_rain(:,1:2)-5/2000),[],'all')<1e-12);
+assert(max(abs(result.Exp_rain(:,3:4)-6/2000),[],'all')<1e-12);
+assert(abs(sum(result.Exp_flo,'all')-.126)<1e-11);
+% Gridded rainfall is sampled without applying a gauge map.
+pattern=reshape(1:12,3,4)/100;
+write_matrix(fullfile(fixture,'RAINFALL.txt'),[pattern;2*pattern;3*pattern]);
+text=setkey(base,'ID_RAIN','0'); result=run_case(text,fixture,options);
+assert(max(abs(result.Exp_rain-3*pattern/2000),[],'all')<1e-12);
+assert(abs(sum(result.Exp_flo,'all')-6*sum(pattern,'all')/1000)<1e-11);
+write_matrix(fullfile(fixture,'RAINFALL.txt'),ones(3,1));
 % Rainfall on a marked building reaches the adjacent ground in both schemes.
 roofMask = zeros(3,4); roofMask(2,2) = 999;
 roofBed = zeros(3,4); roofBed(2,2) = 999;
@@ -164,7 +180,7 @@ write_matrix(fullfile(fixture,'MASK.txt'),roofMask);
 write_matrix(fullfile(fixture,'DEM.txt'),roofBed);
 for scheme = [1 2]
     text = setkey(base,'TSTP2D',num2str(scheme));
-    result = run_case(text,fixture);
+    result = run_case(text,fixture,options);
     assert(abs(sum(result.Exp_flo,'all')-12*0.003) < 1e-11);
     assert(result.Exp_flo(2,2) < 0.003);
     assert(any(result.Exp_flo(roofMask ~= 999) > 0.003));
@@ -176,7 +192,7 @@ write_matrix(fullfile(fixture,'DEM.txt'),zeros(3,4));
 write_matrix(fullfile(fixture,'DEPRESION.txt'),ones(3,4)*0.02);
 text = setkey(base,'TSTP2D','2');
 text = setkey(text,'MODINF','1');
-result = run_case(text,fixture);
+result = run_case(text,fixture,options);
 stored = result.Exp_flo+result.sat_storage+result.unsat_storage;
 assert(max(abs(stored(:)-0.023)) < 1e-11);
 assert(all(result.v_infil(:) > 0));
@@ -190,7 +206,7 @@ text = setkey(base,'N_BOUN','1');
 text = setkey(text,'DELTAT_BOUN','2');
 for scheme = [1 2]
     text = setkey(text,'TSTP2D',num2str(scheme));
-    result = run_case(text,fixture);
+    result = run_case(text,fixture,options);
     assert(max(abs(result.Exp_flo(:,1)-0.05)) < 1e-12);
     assert(all(result.Exp_flo(:,4) == 0));
 end
@@ -204,7 +220,7 @@ write_matrix(fullfile(fixture,'albsoil.txt'),ones(3,4)*0.2);
 fid = fopen(fullfile(fixture,'weather.mdf'),'w');
 fprintf(fid,'TA RH SR LR WD\n20 0.005 200 300 1\n'); fclose(fid);
 text = setkey(base,'MODINT','1');
-result = run_case(text,fixture);
+result = run_case(text,fixture,options);
 assert(all(isfinite(result.Exp_flo),'all'));
 assert(all(result.canopystore == 0,'all'));
 assert(all(result.et_canopy == 0,'all'));
@@ -222,7 +238,7 @@ text = setkey(base,'MODCHN','1');
 text = setkey(text,'N_CHN','1');
 text = setkey(text,'MAX_CHN','4');
 text = setkey(text,'DEPS','DEPS.txt');
-result = run_case(text,fixture);
+result = run_case(text,fixture,options);
 assert(abs(sum(result.ChannelDepth(2,1:3))*2-0.4) < 1e-10);
 assert(all(result.ChannelDepth(2,1:3) >= 0));
 
@@ -241,7 +257,7 @@ benchmark = fileread(fullfile(root,'Test_01.inf'));
 benchmark = setkey(benchmark,'END_TIME','2016 7 5 0 0 10');
 benchmark = setkey(benchmark,'DELTA_T','1');
 benchmark = setkey(benchmark,'RES_GEN',['regression_' char(java.util.UUID.randomUUID)]);
-result = run_case(benchmark,fixture);
+result = run_case(benchmark,fixture,options);
 assert(all(isfinite(result.Exp_flo),'all') && all(result.Exp_flo(result.Exp_flo ~= -9999) >= 0));
 
 fprintf('All OFM regression checks passed.\n');
@@ -255,9 +271,9 @@ function write_matrix(file,value)
 writematrix(value,file,'Delimiter','tab');
 end
 
-function result = run_case(text,fixture)
+function result = run_case(text,fixture,options)
 config = fullfile(fixture,'case.inf');
 fid = fopen(config,'w'); fprintf(fid,'%s',text); fclose(fid);
-result = ofm_urban(config);
+result = ofm_urban(config,options);
 cleanup = onCleanup(@() rmdir(fileparts(result.OutputDirectory),'s'));
 end

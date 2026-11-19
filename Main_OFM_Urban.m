@@ -3,7 +3,11 @@
 clearvars; close all; clc;
 addpath(fullfile(pwd,'src'));
 Filename = 'Test_01.inf';
-Results = ofm_urban(Filename,struct('Plot',true));
+RunOptions = struct('Plot',true,'Device','cpu','Parallel','auto','NumWorkers',4);
+% Compile once with build_ofm to enable threaded adaptive routing.
+% On Apple silicon, run build_gpu once, then set RunOptions.Device='gpu'.
+Results = ofm_urban(Filename,RunOptions);
+disp(Results.Execution);
 fprintf('Step snapshots and summary: %s\n',Results.OutputDirectory);
 
 % Extract point series without loading all gridded results into memory.

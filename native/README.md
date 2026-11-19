@@ -1,4 +1,49 @@
-# Direct SWMM interface
+# Native solvers and direct SWMM interface
+
+## Metal GPU routing
+
+`ofm_metal.mm` and `ofm_metal_kernels.metal` implement adaptive OFM routing
+on Apple silicon GPUs. Build with `build_gpu`, then select `Device='gpu'`
+in `ofm_urban`. GPU routing is independent of MATLAB's CUDA-only `gpuArray`
+path. The build embeds shader source and the MEX creates Metal pipelines at
+runtime. CPU fallback is selected with `Device='cpu'`.
+
+Metal uses compensated FP32 pairs for storage/transfer arithmetic and FP32
+hydraulic powers. It is not a full FP64 backend. The host forms terrain
+differences in double, selects substeps from GPU reductions, and checks the
+final water budget with compensated double sums. See [GPU documentation](../docs/GPU.md)
+for input limits, precision, diagnostics, tests and timings. The backend
+does not call MATLAB from GPU kernels or invoke SWMM from workers.
+
+## Threaded adaptive OFM routing
+
+`ofm_route.cpp` is the C++ execution backend for `src/explicit.m`. Build it
+once per MATLAB platform with `mex -setup C++` and `build_ofm`. It uses
+standard C++ threads, with no OpenMP runtime or toolbox dependency. Linux
+builds enable pthread compiler/linker flags. The build selects the C Matrix
+API entry point rather than the MATLAB Data API for C++.
+
+The MATLAB reference equations remain in `explicit.m` and
+`diffusive_face.m`. The backend applies the same sources, face-depth law,
+Manning flux, roof outlet law, conductance and adaptive timestep limits.
+It partitions independent face calculations, then cell gathers/updates,
+with barriers between phases. Per-cell summation order matches MATLAB;
+there are no concurrent withdrawals from shared cells or unordered sums.
+Fixed boundaries can supply or remove water, as in the MATLAB implementation.
+
+All MATLAB API calls happen on the client thread. Worker threads access
+only numeric buffers and C++ synchronization objects. The team remains idle
+between calls and is reused, then joined when `clear ofm_route` unloads the
+module or MATLAB exits. Changing thread count joins the old team first.
+Errors unwind temporary C++ storage before reporting a MATLAB error.
+
+The gateway accepts `[rate,flux] = ofm_route(shape,dt,depression,dx,Manning,
+bed,depth,source,fixedDepth,threads)`. `rate` is m/s, and `flux(:,:,1:2)`
+contains mean east/south depth-transfer rates. `ofm_route('info')` returns
+the hardware thread cap. The sequential scheme continues to use MATLAB.
+See `run_routing_parallel_tests` for backend parity, conservation and timing.
+
+## Direct SWMM interface
 
 `swmm_live.c` embeds the pinned EPA SWMM engine in a MATLAB MEX module.
 Build it with `addpath('src'); build_swmm`. Source files are compiled from

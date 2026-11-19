@@ -1,10 +1,21 @@
-function [of_rate,uvfluxs] = explicit(TSP2D,shp,n_row,n_col,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,varargin)
+function [of_rate,uvfluxs,diagnostics] = explicit(TSP2D,shp,n_row,n_col,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,varargin)
 %EXPLICIT Conservative finite-volume diffusive-wave routing.
 % Rates, including the input source/sink rate, are depths per second.
 % Sources are applied once, then routing uses adaptive explicit substeps.
 % uvfluxs(:,:,1:2) are mean east/south depth transfer rates [m/s].
 validateattributes(deltaT,{'numeric'},{'scalar','positive','finite'});
 validateattributes(s_grid,{'numeric'},{'scalar','positive','finite'});
+diagnostics=struct('Backend','matlab');
+if numel(varargin)>=2 && strcmp(varargin{2}.Backend,'metal')
+    [of_rate,uvfluxs,diagnostics]=ofm_metal(shp,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,varargin{1});
+    diagnostics.Backend='metal';
+    return
+end
+if numel(varargin)>=2 && strcmp(varargin{2}.Backend,'native')
+    diagnostics.Backend='native';
+    [of_rate,uvfluxs]=ofm_route(shp,deltaT,s_dep,s_grid,man_area,dem,oflow,of_rate,varargin{1},double(varargin{2}.Workers));
+    return
+end
 active = shp ~= -9999;
 roofs = active & (shp == 999 | dem == 999);
 fixed = active & (shp == 4 | shp == 5);
@@ -74,4 +85,5 @@ while remaining > 0
 end
 of_rate = zeros(n_row,n_col);
 of_rate(active) = (oflow(active)-oldDepth(active))/deltaT;
+diagnostics.Substeps=substeps;
 end

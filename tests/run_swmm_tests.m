@@ -1,5 +1,6 @@
-function run_swmm_tests
+function run_swmm_tests(options)
 %RUN_SWMM_TESTS Exercise the real native engine and full OFM/SWMM coupling.
+if nargin<1, options=struct(); end
 root = fileparts(fileparts(mfilename('fullpath')));
 addpath(fullfile(root,'src'));
 if exist('swmm_live','file') ~= 3, error('Run build_swmm before run_swmm_tests.'); end
@@ -87,7 +88,7 @@ for k = 1:size(values,1)
 end
 config = fullfile(folder,'model.inf'); write_text(config,base);
 old = pwd; restore = onCleanup(@() cd(old)); cd(root);
-result = ofm_urban(config);
+result = ofm_urban(config,options);
 outputCleanup = onCleanup(@() rmdir(fileparts(result.OutputDirectory),'s'));
 assert(result.StepsWritten == 20 && result.SewerTimeSeconds == 2);
 assert(sum(result.SewerInVolume) > 0 && sum(result.SewerReturnVolume) > 0);
