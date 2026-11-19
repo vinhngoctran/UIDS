@@ -8,6 +8,12 @@
 
 * OFM-Urban is an open-source Matlab-based software package for the % simulation of hydrological processes in complex watershed systems.
 
+### How to cite
+
+If you use the UIDS model, please cite the following paper:
+
+Tran, Vinh Ngoc, and Jongho Kim. "UIDS: A Matlab-based urban flood model considering rainfall-induced and surcharge-induced inundations." *Environmental Modelling & Software* 179 (2024): 106132.
+
 ### First setup on a new computer (Windows, Linux, or macOS)
 
 **Compile the SWMM interface once on each new computer before running a
